@@ -161,6 +161,9 @@
             <div class="panel">
                 <h3>Selection</h3>
                 <div id="sel" class="muted">Click a file node to inspect structure.</div>
+                <input id="search" type="text" placeholder="Filter files…" style="width:100%;padding:8px;border-radius:8px;border:1px solid #374151;
+              background:#0b1220;color:#e5e7eb;margin:8px 0 12px 0;" />
+
                 <h3 style="margin-top:20px">Files</h3>
                 <ul id="files" class="list"></ul>
             </div>
@@ -169,32 +172,51 @@
     <script>
         const DATA = /*__DATA__*/;
 
+        // ---- Helpers & Elements ----
         const $ = (q) => document.querySelector(q);
+        function fname(p) {
+            const parts = String(p).split(/[\/\\]/);  // split on / or \
+            return parts[parts.length - 1] || String(p);
+        }
+
+
         const depSVG = d3.select('#dep');
         const structSVG = d3.select('#struct');
         const LEFT = document.getElementById('left');
         let CURRENT_PATH = null;
-        function fname(p) { const parts = p.split(/[\/\\]/); return parts[parts.length - 1]; }
+
         const meta = $('#meta');
         const filesList = $('#files');
         const sel = $('#sel');
+        const search = $('#search');
+        window.FILE_ITEMS = []; // {path,name,li}
 
-        meta.textContent = `${DATA.files.length} files, ${DATA.deps.length} deps`;
+        // Guard against missing data
+        if (!DATA || !Array.isArray(DATA.files)) {
+            sel.textContent = 'No data found in payload.';
+        }
 
-        // Populate file list
-        for (const f of DATA.files) {
+        meta.textContent = `${(DATA.files || []).length} files, ${(DATA.deps || []).length} deps`;
+
+        // ---- Build Files List ----
+        filesList.innerHTML = '';
+        for (const f of (DATA.files || [])) {
             const li = document.createElement('li');
-            const a = document.createElement('a'); a.href = '#'; a.textContent = f.path.split('/').slice(-1)[0];
+            const name = fname(f.path);
+            li.dataset.name = name.toLowerCase();
+            const a = document.createElement('a'); a.href = '#'; a.textContent = name;
             a.title = f.path; a.onclick = (e) => { e.preventDefault(); showStruct(f.path); };
             li.appendChild(a);
             const info = document.createElement('div');
             info.className = 'tiny';
-            info.textContent = `${f.entities.length} ent, ${f.num_instances} inst, ${f.num_signals} sig`;
+            info.textContent = `${(f.entities || []).length} ent, ${f.num_instances || 0} inst, ${f.num_signals || 0} sig`;
             li.appendChild(info);
             filesList.appendChild(li);
+            window.FILE_ITEMS.push({ path: f.path, name, li });
         }
 
-        // ---------- Dependency Graph ----------
+        // ---- Dependency Graph ----
+        let DEP_CTX = null; // store selections for highlighting
         function drawDeps() {
             const rect = LEFT.getBoundingClientRect();
             const w = Math.max(100, rect.width);
@@ -206,13 +228,15 @@
                 return;
             }
             const nodesById = new Map();
-            const nodes = DATA.files.map((f, i) => { const n = { id: f.path, file: f, x: Math.random() * w, y: Math.random() * h }; nodesById.set(n.id, n); return n; });
-            const links = DATA.deps.map(d => ({ source: d.source, target: d.target, via: d.via }));
+            const nodes = (DATA.files || []).map((f) => { const n = { id: f.path, file: f, x: Math.random() * w, y: Math.random() * h }; nodesById.set(n.id, n); return n; });
+            const links = (DATA.deps || []).map(d => ({ source: d.source, target: d.target, via: d.via }));
 
             const sim = d3.forceSimulation(nodes)
-                .force('link', d3.forceLink(links).id(d => d.id).distance(120).strength(0.1))
-                .force('charge', d3.forceManyBody().strength(-300))
-                .force('center', d3.forceCenter(w / 2, h / 2));
+                .force('link', d3.forceLink(links).id(d => d.id).distance(140).strength(0.25))
+                .force('charge', d3.forceManyBody().strength(-120))
+                .force('center', d3.forceCenter(w / 2, h / 2))
+                .force('collide', d3.forceCollide().radius(24));
+            sim.velocityDecay(0.9);
 
             const container = depSVG.append('g');
             // Zoom & pan
@@ -222,12 +246,16 @@
                 })
             );
 
-            const link = container.selectAll('line').data(links).enter().append('line').attr('stroke', '#334155').attr('stroke-width', 1);
-            const label = container.selectAll('text.via').data(links).enter().append('text').attr('class', 'tiny').attr('fill', '#94a3b8').text(d => d.via);
+            const link = container.selectAll('line').data(links).enter().append('line').attr('stroke', '#334155').attr('stroke-width', 1).attr('opacity', 0.8);
+            const label = container.selectAll('text.via').data(links).enter().append('text').attr('class', 'tiny').attr('fill', '#94a3b8').text(d => d.via || '');
             const node = container.selectAll('g.node').data(nodes).enter().append('g').attr('class', 'node').call(drag(sim));
             node.append('circle').attr('r', 16).attr('fill', '#1f2937').attr('stroke', '#60a5fa');
             node.append('text').attr('class', 'label').attr('text-anchor', 'middle').attr('dy', 4).text(d => fname(d.file.path));
             node.on('click', (e, d) => { showStruct(d.file.path); });
+            node.on('dblclick', (e, d) => { // pin/unpin
+                if (d.fx == null) { d.fx = d.x; d.fy = d.y; }
+                else { d.fx = null; d.fy = null; }
+            });
 
             sim.on('tick', () => {
                 link.attr('x1', d => d.source.x).attr('y1', d => d.source.y).attr('x2', d => d.target.x).attr('y2', d => d.target.y);
@@ -235,19 +263,26 @@
                 node.attr('transform', d => `translate(${d.x},${d.y})`);
             });
 
+            // Reduce floatiness: let layout settle, then stop forces
+            setTimeout(() => { sim.alphaTarget(0); sim.stop(); }, 1500);
+
+            DEP_CTX = { node, link, label, nodes, links };
+            applySearchFilter(search ? search.value : '');
+
             function drag(sim) {
                 function started(event, d) { if (!event.active) sim.alphaTarget(0.3).restart(); if (event.sourceEvent && event.sourceEvent.stopPropagation) event.sourceEvent.stopPropagation(); d.fx = d.x; d.fy = d.y; }
                 function dragged(event, d) { d.fx = event.x; d.fy = event.y; }
-                function ended(event, d) { if (!event.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }
+                function ended(event, d) { if (!event.active) sim.alphaTarget(0); }
                 return d3.drag().on('start', started).on('drag', dragged).on('end', ended);
             }
         }
 
-        // ---------- Structure (per file) ----------
+        // ---- Structure (per file) ----
         function showStruct(path) {
             CURRENT_PATH = path;
             $('#btn-struct').click();
             const model = DATA.structures[path];
+            if (!model) { sel.textContent = 'No structure for ' + path; return; }
             sel.innerHTML = `<div><span class="k">file</span>: <span class="v">${path}</span></div>`;
             drawStruct(path, model);
         }
@@ -263,10 +298,8 @@
             const instances = model.instances || [];
             const signals = Object.entries(model.signals || {});
 
-            // Layout: instances in a grid, signals listed left side
             const g = structSVG.append('g');
 
-            // Signals column
             const sigX = P.left, sigW = 200;
             g.append('text').attr('x', sigX).attr('y', P.top - 6).attr('class', 'tiny').text('signals');
             signals.slice(0, 200).forEach(([name, typ], i) => {
@@ -274,7 +307,6 @@
                 g.append('text').attr('x', sigX).attr('y', y).attr('class', 'tiny').text(`${name}: ${typ}`);
             });
 
-            // Instance boxes
             const instCols = Math.max(1, Math.floor((w - sigW - 3 * P.left) / (P.boxW + P.colGap)));
             const instX0 = sigX + sigW + P.left;
             const instG = g.append('g');
@@ -288,14 +320,11 @@
                 instG.append('rect').attr('x', x).attr('y', y).attr('width', P.boxW).attr('height', P.boxH).attr('class', 'box inst');
                 instG.append('text').attr('x', x + 10).attr('y', y + 16).attr('class', 'label').text(`${inst.label}: ${inst.type}`);
                 instG.append('text').attr('x', x + 10).attr('y', y + 32).attr('class', 'tiny').text(inst.kind);
-                // list a few port assoc inside the box
                 let k = 0; for (const [f, a] of Object.entries(inst.ports || {}).slice(0, 4)) {
                     instG.append('text').attr('x', x + 10).attr('y', y + 48 + 14 * k).attr('class', 'tiny').text(`${f} => ${a}`); k++;
                 }
             });
 
-            // We draw simple lines from box bottom to any signal name that matches 'actual'
-            // Fast index for signal label positions (text only; not precise)
             const sigIndex = {};
             let i = 0; signals.forEach(([name, typ]) => { sigIndex[name] = i++; });
 
@@ -305,7 +334,7 @@
                     if (sigIndex[a] !== undefined) {
                         const ip = instPos[inst.label];
                         const ySig = P.top + 20 + sigIndex[a] * 18 - 6;
-                        const xSig = sigX + 160; // right edge of signal text column
+                        const xSig = sigX + 160;
                         const xBox = ip.x + P.boxW / 2;
                         const yBox = ip.y + P.boxH;
                         lineG.append('path').attr('d', `M${xSig},${ySig} C ${xSig + 60},${ySig} ${xBox - 60},${yBox} ${xBox},${yBox}`)
@@ -315,14 +344,31 @@
             });
         }
 
-        // Toggle buttons
+        // ---- Search ----
+        function filterFiles(q) {
+            const s = (q || '').toLowerCase().trim();
+            for (const item of window.FILE_ITEMS) { item.li.style.display = (!s || item.name.toLowerCase().includes(s)) ? '' : 'none'; }
+        }
+        function applySearchFilter(q) {
+            if (!DEP_CTX) return;
+            const s = (q || '').toLowerCase().trim();
+            const ok = new Set();
+            if (s) { for (const it of window.FILE_ITEMS) { if (it.name.toLowerCase().includes(s)) ok.add(it.path); } }
+            const showAll = !s || ok.size === 0;
+            DEP_CTX.node.attr('opacity', d => showAll || ok.has(d.file.path) ? 1 : 0.15);
+            DEP_CTX.link.attr('opacity', d => {
+                const a = d.source.id || d.source; const b = d.target.id || d.target;
+                return showAll || (ok.has(a) && ok.has(b)) ? 0.8 : 0.1;
+            });
+        }
+        if (search) { search.addEventListener('input', () => { filterFiles(search.value); applySearchFilter(search.value); }); }
+
+        // ---- Buttons & Init ----
         $('#btn-dep').onclick = () => { depSVG.style('display', null); structSVG.style('display', 'none'); drawDeps(); };
         $('#btn-struct').onclick = () => { depSVG.style('display', 'none'); structSVG.style('display', null); structSVG.selectAll('*').remove(); };
-
-        // Initial render
         $('#btn-dep').click();
 
-        // Resize handler to keep SVG filling the area
+        // ---- Resize ----
         window.addEventListener('resize', () => {
             const depVisible = depSVG.style('display') !== 'none';
             if (depVisible) drawDeps();
