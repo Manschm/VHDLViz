@@ -152,6 +152,12 @@
         <button id="btn-dep">Dependency Graph</button>
         <button id="btn-struct">File Structure</button>
     </header>
+    <!-- Toolbar for graph spacing -->
+    <div style="padding:8px 12px; border-bottom:1px solid #1f2937; display:flex; gap:12px; align-items:center;">
+        <div class="tiny" style="margin-right:6px;">Node spacing</div>
+        <input id="space" type="range" min="80" max="320" value="160" step="10" style="width:220px" />
+        <button id="btn-relayout">Relayout</button>
+    </div>
     <div id="wrap">
         <div id="left">
             <svg id="dep"></svg>
@@ -161,9 +167,6 @@
             <div class="panel">
                 <h3>Selection</h3>
                 <div id="sel" class="muted">Click a file node to inspect structure.</div>
-                <input id="search" type="text" placeholder="Filter files…" style="width:100%;padding:8px;border-radius:8px;border:1px solid #374151;
-              background:#0b1220;color:#e5e7eb;margin:8px 0 12px 0;" />
-
                 <h3 style="margin-top:20px">Files</h3>
                 <ul id="files" class="list"></ul>
             </div>
@@ -175,10 +178,9 @@
         // ---- Helpers & Elements ----
         const $ = (q) => document.querySelector(q);
         function fname(p) {
-            const parts = String(p).split(/[\/\\]/);  // split on / or \
+            const parts = String(p).split(/[\/\\]/);
             return parts[parts.length - 1] || String(p);
         }
-
 
         const depSVG = d3.select('#dep');
         const structSVG = d3.select('#struct');
@@ -189,7 +191,10 @@
         const filesList = $('#files');
         const sel = $('#sel');
         const search = $('#search');
+        const spaceCtl = $('#space');
+        const btnRelayout = $('#btn-relayout');
         window.FILE_ITEMS = []; // {path,name,li}
+        function getSpacing() { return spaceCtl ? (+spaceCtl.value || 160) : 160; } // {path,name,li}
 
         // Guard against missing data
         if (!DATA || !Array.isArray(DATA.files)) {
@@ -228,28 +233,28 @@
                 return;
             }
             const nodesById = new Map();
-            const nodes = (DATA.files || []).map((f) => { const n = { id: f.path, file: f, x: Math.random() * w, y: Math.random() * h }; nodesById.set(n.id, n); return n; });
+            const nodes = (DATA.files || []).map((f, i) => { const cols = Math.max(1, Math.floor(Math.sqrt((DATA.files || []).length))); const col = i % cols, row = Math.floor(i / cols); const gx = (w / (cols + 1)) * (col + 1), gy = (h / (Math.ceil((DATA.files || []).length / cols) + 1)) * (row + 1); const n = { id: f.path, file: f, x: gx + (Math.random() - 0.5) * 20, y: gy + (Math.random() - 0.5) * 20 }; nodesById.set(n.id, n); return n; });
             const links = (DATA.deps || []).map(d => ({ source: d.source, target: d.target, via: d.via }));
 
+            const s = getSpacing();
             const sim = d3.forceSimulation(nodes)
-                .force('link', d3.forceLink(links).id(d => d.id).distance(140).strength(0.25))
-                .force('charge', d3.forceManyBody().strength(-120))
+                .force('link', d3.forceLink(links).id(d => d.id).distance(s).strength(0.3))
+                .force('charge', d3.forceManyBody().strength(-1.2 * s))
                 .force('center', d3.forceCenter(w / 2, h / 2))
-                .force('collide', d3.forceCollide().radius(24));
+                .force('collide', d3.forceCollide().radius(Math.max(22, s * 0.22)).iterations(2));
             sim.velocityDecay(0.9);
 
             const container = depSVG.append('g');
             // Zoom & pan
-            depSVG.call(
-                d3.zoom().scaleExtent([0.2, 5]).on('zoom', (event) => {
-                    container.attr('transform', event.transform);
-                })
-            );
+            const zoomBehavior = d3.zoom().scaleExtent([0.2, 5]).on('zoom', (event) => {
+                container.attr('transform', event.transform);
+            });
+            depSVG.call(zoomBehavior);
 
             const link = container.selectAll('line').data(links).enter().append('line').attr('stroke', '#334155').attr('stroke-width', 1).attr('opacity', 0.8);
             const label = container.selectAll('text.via').data(links).enter().append('text').attr('class', 'tiny').attr('fill', '#94a3b8').text(d => d.via || '');
             const node = container.selectAll('g.node').data(nodes).enter().append('g').attr('class', 'node').call(drag(sim));
-            node.append('circle').attr('r', 16).attr('fill', '#1f2937').attr('stroke', '#60a5fa');
+            node.append('circle').attr('r', 18).attr('fill', '#1f2937').attr('stroke', '#60a5fa');
             node.append('text').attr('class', 'label').attr('text-anchor', 'middle').attr('dy', 4).text(d => fname(d.file.path));
             node.on('click', (e, d) => { showStruct(d.file.path); });
             node.on('dblclick', (e, d) => { // pin/unpin
@@ -264,7 +269,16 @@
             });
 
             // Reduce floatiness: let layout settle, then stop forces
-            setTimeout(() => { sim.alphaTarget(0); sim.stop(); }, 1500);
+            setTimeout(() => {
+                sim.alphaTarget(0); sim.stop();
+                // Zoom-to-fit after layout settles
+                const xs = nodes.map(n => n.x), ys = nodes.map(n => n.y);
+                const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+                const bw = Math.max(10, maxX - minX), bh = Math.max(10, maxY - minY);
+                const k = 0.9 * Math.min(w / bw, h / bh);
+                const tx = (w - k * (minX + maxX)) / 2; const ty = (h - k * (minY + maxY)) / 2;
+                depSVG.transition().duration(350).call(zoomBehavior.transform, d3.zoomIdentity.translate(tx, ty).scale(k));
+            }, 1200);
 
             DEP_CTX = { node, link, label, nodes, links };
             applySearchFilter(search ? search.value : '');
@@ -368,12 +382,16 @@
         $('#btn-struct').onclick = () => { depSVG.style('display', 'none'); structSVG.style('display', null); structSVG.selectAll('*').remove(); };
         $('#btn-dep').click();
 
+        if (spaceCtl) { spaceCtl.addEventListener('input', () => { if (depSVG.style('display') !== 'none') drawDeps(); }); }
+        if (btnRelayout) { btnRelayout.addEventListener('click', () => { if (depSVG.style('display') !== 'none') drawDeps(); }); }
+
         // ---- Resize ----
         window.addEventListener('resize', () => {
             const depVisible = depSVG.style('display') !== 'none';
             if (depVisible) drawDeps();
             else if (CURRENT_PATH) drawStruct(CURRENT_PATH, DATA.structures[CURRENT_PATH]);
         });
+
     </script>
 </body>
 
