@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VHDL Visualizer</title>
+    <style>
+        :root {
+            --bg: #0e1116;
+            --fg: #e5e7eb;
+            --muted: #9aa4b2;
+            --accent: #60a5fa;
+            --box: #1b2230;
+            --line: #3b82f6;
+        }
+
+        html,
+        body {
+            height: 100%;
+            margin: 0;
+            background: var(--bg);
+            color: var(--fg);
+            font: 14px/1.35 system-ui, Segoe UI, Inter, Roboto, sans-serif;
+        }
+
+        header {
+            padding: 12px 16px;
+            border-bottom: 1px solid #1f2937;
+            display: flex;
+            gap: 16px;
+            align-items: center;
+        }
+
+        header h1 {
+            font-size: 16px;
+            margin: 0;
+        }
+
+        #wrap {
+            display: grid;
+            grid-template-columns: 1fr 380px;
+            height: calc(100% - 50px);
+        }
+
+        #left {
+            position: relative;
+        }
+
+        #right {
+            border-left: 1px solid #1f2937;
+            overflow: auto;
+        }
+
+        #dep,
+        #struct {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        .panel {
+            padding: 12px;
+        }
+
+        .muted {
+            color: var(--muted);
+        }
+
+        .pill {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: #111827;
+            color: var(--muted);
+            font-size: 12px;
+            margin-left: 6px;
+        }
+
+        button {
+            background: #111827;
+            border: 1px solid #374151;
+            color: var(--fg);
+            padding: 6px 10px;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #0b1220;
+        }
+
+        .box {
+            fill: var(--box);
+            stroke: #2b3950;
+            stroke-width: 1;
+            rx: 10;
+        }
+
+        .sig {
+            stroke: #6b7280;
+            stroke-width: 1;
+        }
+
+        .inst {
+            stroke: var(--line);
+            stroke-width: 1;
+        }
+
+        .label {
+            font-size: 12px;
+            fill: var(--fg);
+        }
+
+        .tiny {
+            font-size: 11px;
+            fill: var(--muted);
+        }
+
+        .list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .list li {
+            padding: 8px 0;
+            border-bottom: 1px solid #111827;
+        }
+
+        .k {
+            color: #93c5fd;
+        }
+
+        .v {
+            color: #a7f3d0;
+        }
+
+        a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+    </style>
+    <!-- D3 from CDN; if offline, dependency graph will degrade to a simple list -->
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+</head>
+
+<body>
+    <header>
+        <h1>VHDL Visualizer <span class="pill" id="meta"></span></h1>
+        <button id="btn-dep">Dependency Graph</button>
+        <button id="btn-struct">File Structure</button>
+    </header>
+    <div id="wrap">
+        <div id="left">
+            <svg id="dep"></svg>
+            <svg id="struct" style="display:none"></svg>
+        </div>
+        <aside id="right">
+            <div class="panel">
+                <h3>Selection</h3>
+                <div id="sel" class="muted">Click a file node to inspect structure.</div>
+                <h3 style="margin-top:20px">Files</h3>
+                <ul id="files" class="list"></ul>
+            </div>
+        </aside>
+    </div>
+    <script>
+        const DATA = /*__DATA__*/;
+
+        const $ = (q) => document.querySelector(q);
+        const depSVG = d3.select('#dep');
+        const structSVG = d3.select('#struct');
+        const LEFT = document.getElementById('left');
+        let CURRENT_PATH = null;
+        function fname(p) { const parts = p.split(/[\/\\]/); return parts[parts.length - 1]; }
+        const meta = $('#meta');
+        const filesList = $('#files');
+        const sel = $('#sel');
+
+        meta.textContent = `${DATA.files.length} files, ${DATA.deps.length} deps`;
+
+        // Populate file list
+        for (const f of DATA.files) {
+            const li = document.createElement('li');
+            const a = document.createElement('a'); a.href = '#'; a.textContent = f.path.split('/').slice(-1)[0];
+            a.title = f.path; a.onclick = (e) => { e.preventDefault(); showStruct(f.path); };
+            li.appendChild(a);
+            const info = document.createElement('div');
+            info.className = 'tiny';
+            info.textContent = `${f.entities.length} ent, ${f.num_instances} inst, ${f.num_signals} sig`;
+            li.appendChild(info);
+            filesList.appendChild(li);
+        }
+
+        // ---------- Dependency Graph ----------
+        function drawDeps() {
+            const rect = LEFT.getBoundingClientRect();
+            const w = Math.max(100, rect.width);
+            const h = Math.max(100, rect.height);
+            depSVG.attr('viewBox', `0 0 ${w} ${h}`).attr('width', w).attr('height', h);
+            depSVG.selectAll('*').remove();
+            if (!window.d3) {
+                depSVG.append('text').attr('x', 10).attr('y', 20).text('d3 not available (offline)');
+                return;
+            }
+            const nodesById = new Map();
+            const nodes = DATA.files.map((f, i) => { const n = { id: f.path, file: f, x: Math.random() * w, y: Math.random() * h }; nodesById.set(n.id, n); return n; });
+            const links = DATA.deps.map(d => ({ source: d.source, target: d.target, via: d.via }));
+
+            const sim = d3.forceSimulation(nodes)
+                .force('link', d3.forceLink(links).id(d => d.id).distance(120).strength(0.1))
+                .force('charge', d3.forceManyBody().strength(-300))
+                .force('center', d3.forceCenter(w / 2, h / 2));
+
+            const container = depSVG.append('g');
+            // Zoom & pan
+            depSVG.call(
+                d3.zoom().scaleExtent([0.2, 5]).on('zoom', (event) => {
+                    container.attr('transform', event.transform);
+                })
+            );
+
+            const link = container.selectAll('line').data(links).enter().append('line').attr('stroke', '#334155').attr('stroke-width', 1);
+            const label = container.selectAll('text.via').data(links).enter().append('text').attr('class', 'tiny').attr('fill', '#94a3b8').text(d => d.via);
+            const node = container.selectAll('g.node').data(nodes).enter().append('g').attr('class', 'node').call(drag(sim));
+            node.append('circle').attr('r', 16).attr('fill', '#1f2937').attr('stroke', '#60a5fa');
+            node.append('text').attr('class', 'label').attr('text-anchor', 'middle').attr('dy', 4).text(d => fname(d.file.path));
+            node.on('click', (e, d) => { showStruct(d.file.path); });
+
+            sim.on('tick', () => {
+                link.attr('x1', d => d.source.x).attr('y1', d => d.source.y).attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+                label.attr('x', d => (d.source.x + d.target.x) / 2).attr('y', d => (d.source.y + d.target.y) / 2);
+                node.attr('transform', d => `translate(${d.x},${d.y})`);
+            });
+
+            function drag(sim) {
+                function started(event, d) { if (!event.active) sim.alphaTarget(0.3).restart(); if (event.sourceEvent && event.sourceEvent.stopPropagation) event.sourceEvent.stopPropagation(); d.fx = d.x; d.fy = d.y; }
+                function dragged(event, d) { d.fx = event.x; d.fy = event.y; }
+                function ended(event, d) { if (!event.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }
+                return d3.drag().on('start', started).on('drag', dragged).on('end', ended);
+            }
+        }
+
+        // ---------- Structure (per file) ----------
+        function showStruct(path) {
+            CURRENT_PATH = path;
+            $('#btn-struct').click();
+            const model = DATA.structures[path];
+            sel.innerHTML = `<div><span class="k">file</span>: <span class="v">${path}</span></div>`;
+            drawStruct(path, model);
+        }
+
+        function drawStruct(path, model) {
+            const rect = LEFT.getBoundingClientRect();
+            const w = Math.max(100, rect.width);
+            const h = Math.max(100, rect.height);
+            structSVG.attr('viewBox', `0 0 ${w} ${h}`).attr('width', w).attr('height', h);
+            structSVG.selectAll('*').remove();
+
+            const P = { left: 24, top: 24, colGap: 24, rowH: 64, boxW: 220, boxH: 40 };
+            const instances = model.instances || [];
+            const signals = Object.entries(model.signals || {});
+
+            // Layout: instances in a grid, signals listed left side
+            const g = structSVG.append('g');
+
+            // Signals column
+            const sigX = P.left, sigW = 200;
+            g.append('text').attr('x', sigX).attr('y', P.top - 6).attr('class', 'tiny').text('signals');
+            signals.slice(0, 200).forEach(([name, typ], i) => {
+                const y = P.top + 20 + i * 18;
+                g.append('text').attr('x', sigX).attr('y', y).attr('class', 'tiny').text(`${name}: ${typ}`);
+            });
+
+            // Instance boxes
+            const instCols = Math.max(1, Math.floor((w - sigW - 3 * P.left) / (P.boxW + P.colGap)));
+            const instX0 = sigX + sigW + P.left;
+            const instG = g.append('g');
+            const instPos = {};
+            instances.forEach((inst, i) => {
+                const col = i % instCols;
+                const row = Math.floor(i / instCols);
+                const x = instX0 + col * (P.boxW + P.colGap);
+                const y = P.top + row * (P.boxH + P.rowH);
+                instPos[inst.label] = { x: x, y: y };
+                instG.append('rect').attr('x', x).attr('y', y).attr('width', P.boxW).attr('height', P.boxH).attr('class', 'box inst');
+                instG.append('text').attr('x', x + 10).attr('y', y + 16).attr('class', 'label').text(`${inst.label}: ${inst.type}`);
+                instG.append('text').attr('x', x + 10).attr('y', y + 32).attr('class', 'tiny').text(inst.kind);
+                // list a few port assoc inside the box
+                let k = 0; for (const [f, a] of Object.entries(inst.ports || {}).slice(0, 4)) {
+                    instG.append('text').attr('x', x + 10).attr('y', y + 48 + 14 * k).attr('class', 'tiny').text(`${f} => ${a}`); k++;
+                }
+            });
+
+            // We draw simple lines from box bottom to any signal name that matches 'actual'
+            // Fast index for signal label positions (text only; not precise)
+            const sigIndex = {};
+            let i = 0; signals.forEach(([name, typ]) => { sigIndex[name] = i++; });
+
+            const lineG = g.append('g');
+            instances.forEach(inst => {
+                for (const [f, a] of Object.entries(inst.ports || {})) {
+                    if (sigIndex[a] !== undefined) {
+                        const ip = instPos[inst.label];
+                        const ySig = P.top + 20 + sigIndex[a] * 18 - 6;
+                        const xSig = sigX + 160; // right edge of signal text column
+                        const xBox = ip.x + P.boxW / 2;
+                        const yBox = ip.y + P.boxH;
+                        lineG.append('path').attr('d', `M${xSig},${ySig} C ${xSig + 60},${ySig} ${xBox - 60},${yBox} ${xBox},${yBox}`)
+                            .attr('fill', 'none').attr('class', 'sig');
+                    }
+                }
+            });
+        }
+
+        // Toggle buttons
+        $('#btn-dep').onclick = () => { depSVG.style('display', null); structSVG.style('display', 'none'); drawDeps(); };
+        $('#btn-struct').onclick = () => { depSVG.style('display', 'none'); structSVG.style('display', null); structSVG.selectAll('*').remove(); };
+
+        // Initial render
+        $('#btn-dep').click();
+
+        // Resize handler to keep SVG filling the area
+        window.addEventListener('resize', () => {
+            const depVisible = depSVG.style('display') !== 'none';
+            if (depVisible) drawDeps();
+            else if (CURRENT_PATH) drawStruct(CURRENT_PATH, DATA.structures[CURRENT_PATH]);
+        });
+    </script>
+</body>
+
+</html>
