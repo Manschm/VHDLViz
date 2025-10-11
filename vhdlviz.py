@@ -3,6 +3,8 @@ import argparse, json, sys, os, pathlib
 from parser import parse_vhdl_file
 from model import DesignDB, FileInfo
 from visualize import write_dependency_html, write_block_html
+from typing import Dict
+from model import Port
 
 def discover_files(roots):
     exts = {".vhd", ".vhdl"}
@@ -79,6 +81,10 @@ def main():
     db = DesignDB.from_files(file_infos, deps)
     db_json_path = outdir / "design_db.json"
     db_json_path.write_text(json.dumps(db.to_json(), indent=2), encoding="utf-8")
+    entity_port_db: Dict[str, Dict[str, Port]] = {}
+    for fi in file_infos:
+        if fi.entity_name:
+            entity_port_db[fi.entity_name] = {p.name: p for p in fi.ports}
 
     # Write dependency graph HTML
     index_path = outdir / "index.html"
@@ -89,7 +95,7 @@ def main():
         # Note: we use entity name if present, else filename stem
         label = fi.entity_name or fi.path.stem
         p = block_dir / f"{label}.html"
-        write_block_html(p, fi)
+        write_block_html(p, fi, entity_port_db)
 
     print(f"[ok] Generated:\n- {index_path}\n- {db_json_path}\n- {block_dir}/<file>.html")
     if args.open:

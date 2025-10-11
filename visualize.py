@@ -1,13 +1,14 @@
 import json, pathlib
+from typing import Dict
+from model import FileInfo, Port
+from wiring import build_wiring
 
 def _load_template(name: str) -> str:
     here = pathlib.Path(__file__).parent
-    tpl = (here / "html" / name).read_text(encoding="utf-8")
-    return tpl
+    return (here / "html" / name).read_text(encoding="utf-8")
 
 def write_dependency_html(out_path: pathlib.Path, db):
     tpl = _load_template("dep_template.html")
-    # Build Cytoscape elements
     nodes = []
     id_for = {}
     for i, f in enumerate(db.files):
@@ -21,11 +22,14 @@ def write_dependency_html(out_path: pathlib.Path, db):
             edges.append({"data": {"id": f"e_{id_for[src]}_{id_for[dst]}",
                                    "source": id_for[src], "target": id_for[dst]}})
     payload = {"nodes": nodes, "edges": edges}
-    html = tpl.replace("/*__DATA__*/", json.dumps(payload))
-    out_path.write_text(html, encoding="utf-8")
+    out_path.write_text(tpl.replace("/*__DATA__*/", json.dumps(payload)), encoding="utf-8")
 
-def write_block_html(out_path: pathlib.Path, fi):
+def write_block_html(out_path: pathlib.Path, fi: FileInfo, entity_port_db: Dict[str, Dict[str, Port]]):
     tpl = _load_template("block_template.html")
+
+    # Build wiring graph
+    graph = build_wiring(fi, entity_port_db)
+
     payload = {
         "file": {"path": str(fi.path), "entity": fi.entity_name or fi.path.stem},
         "ports": [p.__dict__ for p in fi.ports],
@@ -38,6 +42,6 @@ def write_block_html(out_path: pathlib.Path, fi):
                 "port_map": inst.port_map
             } for inst in fi.instances
         ],
+        "graph": graph
     }
-    html = tpl.replace("/*__BLOCK_DATA__*/", json.dumps(payload))
-    out_path.write_text(html, encoding="utf-8")
+    out_path.write_text(tpl.replace("/*__BLOCK_DATA__*/", json.dumps(payload)), encoding="utf-8")

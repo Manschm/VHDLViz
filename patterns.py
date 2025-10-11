@@ -45,3 +45,8 @@ PMAP_KV_RE = re.compile(
     r"(?P<formal>\w+)\s*=>\s*(?P<actual>[^,()]+)(?:,|$)",
     re.IGNORECASE,
 )
+
+ASSIGN_RE = re.compile(
+    r"(?<!\S)(?P<lhs>\w+)\s*<=\s*(?P<expr>.*?);",
+    FLAGS
+)

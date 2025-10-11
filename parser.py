@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 from model import FileInfo, Port, Signal, Instance
 import patterns
 
@@ -15,12 +15,48 @@ def _parse_ports(port_blob: str) -> List[Port]:
             ports.append(Port(name=nm, direction=direction, dtype=dtype))
     return ports
 
+def _split_assoc_list(s: str) -> List[str]:
+    """Split 'a=>b(c,d), x=>y' by commas not inside (), [], {}, or quotes."""
+    parts, buf, depth = [], [], 0
+    in_str = False
+    quote = ''
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if in_str:
+            buf.append(ch)
+            if ch == quote:
+                in_str = False
+            elif ch == '\\' and i + 1 < len(s):
+                buf.append(s[i+1]); i += 1
+        else:
+            if ch in ('"', "'"):
+                in_str = True; quote = ch; buf.append(ch)
+            elif ch in '([{':
+                depth += 1; buf.append(ch)
+            elif ch in ')]}':
+                depth = max(0, depth - 1); buf.append(ch)
+            elif ch == ',' and depth == 0:
+                parts.append(''.join(buf).strip()); buf = []
+            else:
+                buf.append(ch)
+        i += 1
+    if buf:
+        parts.append(''.join(buf).strip())
+    return [p for p in parts if p]
+
 def _parse_portmap(pmap_blob: str):
     pm = {}
     if not pmap_blob:
         return pm
-    for kv in patterns.PMAP_KV_RE.finditer(pmap_blob):
-        pm[kv.group("formal").strip()] = kv.group("actual").strip()
+    for item in _split_assoc_list(pmap_blob):
+        if '=>' not in item:
+            continue
+        formal, actual = item.split('=>', 1)
+        formal = formal.strip()
+        if formal.lower() == 'others':
+            continue
+        pm[formal] = actual.strip()
     return pm
 
 def parse_vhdl_file(path: Path, text: str) -> FileInfo:
