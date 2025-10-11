@@ -17,7 +17,9 @@
     .key { font-weight:600; }
     .hint { color:#666; font-size:12px; }
     #tip { position: fixed; pointer-events: none; background: #111; color:#fff; padding:6px 8px; border-radius:6px; font-size:12px; opacity:0; transition:opacity .08s ease; max-width: 460px; }
-    .dim { opacity: 0.12 }
+    .dim { opacity: 0.15 }
+    .hi-edge { stroke: #3b82f6 !important; stroke-width: 3 !important; }
+    .hi-node rect { stroke: #3b82f6 !important; stroke-width: 2.5 !important; }
   </style>
   <script src="https://unpkg.com/elkjs@0.9.3/lib/elk.bundled.js"></script>
   <script> const DATA = /*__BLOCK_DATA__*/ </script>
@@ -41,9 +43,9 @@
       <div class="key">Instances</div><div id="instances"></div>
     </div>
     <div class="section hint">
-      • **Inputs drive the design**; outputs are sinks.<br>
-      • Hover edges to see exact pins; click an edge to isolate; ESC to clear.<br>
-      • Turn off “Group buses” to see every slice separately.
+      • Inputs drive the design; outputs are sinks.<br>
+      • Hover edges to see pins; click edges/nodes to highlight; ESC or Reset to clear.<br>
+      • “Group buses” shows one edge per base with a count; turn off for per-slice edges.
     </div>
   </div>
   <div id="canvas"><svg id="elk"></svg></div>
@@ -73,7 +75,6 @@
   const NODES = DATA.graph.nodes;
   const EDGES = DATA.graph.edges;
 
-  // Node styles / ranks
   function nodeStyle(kind){
     if (kind === 'instance') return {w: 220, h: 100, fill:'#eef3ff', stroke:'#99b2ff', rx:12};
     if (kind === 'entity_in') return {w: 150, h: 36, fill:'#e8fff1', stroke:'#70c790', rx:10};
@@ -84,13 +85,12 @@
     return {w: 120, h: 30, fill:'#f4f4f4', stroke:'#bbb', rx:10};
   }
   function rank(kind){
-    if (kind === 'entity_in' || kind === 'const' || kind === 'expr') return 0;    // sources (left)
+    if (kind === 'entity_in' || kind === 'const' || kind === 'expr') return 0;
     if (kind === 'instance') return 1;
-    if (kind === 'entity_out' || kind === 'entity_bi') return 2;                  // sinks (right)
+    if (kind === 'entity_out' || kind === 'entity_bi') return 2;
     return 1;
   }
 
-  // Build ELK input
   const elk = new ELK();
   const g = {
     id: "root",
@@ -104,28 +104,30 @@
     children: NODES.map(n => ({
       id: n.id,
       width: nodeStyle(n.kind).w,
-      // Instance height grows with pin count
       height: n.kind === 'instance'
         ? Math.max(80, 24 + 16 * Math.max((n.inputs||[]).length, (n.outputs||[]).length))
         : nodeStyle(n.kind).h,
       labels: [{text: n.label}],
       layoutOptions: {'elk.layered.nodePlacement.bk.fixedAlignment': String(rank(n.kind))}
     })),
-    // Edges are added after we compute pin anchors; keep metadata here
     edges: EDGES.map(e => ({ id:e.id, sources:[e.source], targets:[e.target],
                               labels:[{text:e.label}], base:e.base||e.label,
                               src_pin:e.src_pin||"", dst_pin:e.dst_pin||"",
                               bundle_idx:e.bundle_idx||0, bundle_n:e.bundle_n||1 }))
   };
 
-  // Drawing
   elk.layout(g).then(lg => {
     const svg = document.getElementById('elk');
     const NS = "http://www.w3.org/2000/svg";
     svg.setAttribute('viewBox', `0 0 ${lg.width+80} ${lg.height+80}`);
 
-    // Pin anchor map: nodeId -> {in:{pin: y}, out:{pin: y}}
-    const ANCH = {};
+    const tip = document.getElementById('tip');
+    function setTip(x,y,html){ tip.style.left = (x+12)+'px'; tip.style.top = (y+12)+'px'; tip.innerHTML = html; tip.style.opacity = 1; }
+    function hideTip(){ tip.style.opacity = 0; }
+
+    // ==== Node drawing & pin anchors ====
+    const ANCH = {};  // nodeId -> {in:{pin:y}, out:{pin:y}}
+    const NODEGROUPS = new Map(); // nodeId -> <g>
 
     function recordPin(nodeId, side, pin, y){
       ANCH[nodeId] ||= {in:{}, out:{}};
@@ -136,6 +138,7 @@
       const st = nodeStyle('instance');
       const group = document.createElementNS(NS, 'g');
       group.setAttribute('transform', `translate(${n.x+40}, ${n.y+40})`);
+      group.setAttribute('data-node-id', n.id);
 
       const rect = document.createElementNS(NS, 'rect');
       rect.setAttribute('width', n.width); rect.setAttribute('height', n.height);
@@ -143,20 +146,17 @@
       rect.setAttribute('rx', st.rx); rect.setAttribute('ry', st.rx);
       group.appendChild(rect);
 
-      // Title
       const t = document.createElementNS(NS, 'text');
       t.setAttribute('x', 8); t.setAttribute('y', 16);
       t.setAttribute('font-size', '12'); t.textContent = nodeData.label;
       group.appendChild(t);
 
-      // Pins
       const ins = nodeData.inputs || [], outs = nodeData.outputs || [];
       const rows = Math.max(ins.length, outs.length);
       const top = 30, rowH = 16;
 
       for (let i=0;i<rows;i++){
         const y = top + i*rowH;
-        // left pin (input or empty)
         if (i < ins.length){
           const pin = ins[i];
           const dotL = document.createElementNS(NS, 'circle');
@@ -165,9 +165,8 @@
           const lbl = document.createElementNS(NS, 'text');
           lbl.setAttribute('x', 6); lbl.setAttribute('y', y+4);
           lbl.setAttribute('font-size', '11'); lbl.textContent = pin; group.appendChild(lbl);
-          recordPin(n.id, 'in', nodeData.id ? pin : pin, n.y+40 + y);
+          recordPin(n.id, 'in', pin, n.y+40 + y);
         }
-        // right pin (output or empty)
         if (i < outs.length){
           const pin = outs[i];
           const dotR = document.createElementNS(NS, 'circle');
@@ -177,54 +176,67 @@
           lbl.setAttribute('x', n.width - 6); lbl.setAttribute('y', y+4);
           lbl.setAttribute('font-size', '11'); lbl.setAttribute('text-anchor', 'end');
           lbl.textContent = pin; group.appendChild(lbl);
-          recordPin(n.id, 'out', nodeData.id ? pin : pin, n.y+40 + y);
+          recordPin(n.id, 'out', pin, n.y+40 + y);
         }
       }
 
       svg.appendChild(group);
+      NODEGROUPS.set(n.id, group);
+
+      // Node click -> highlight node + all connected edges
+      group.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        highlightNode(n.id);
+      });
     }
 
     function drawSimple(n, kind){
       const st = nodeStyle(kind);
       const group = document.createElementNS(NS, 'g');
       group.setAttribute('transform', `translate(${n.x+40}, ${n.y+40})`);
+      group.setAttribute('data-node-id', n.id);
+
       const rect = document.createElementNS(NS, 'rect');
       rect.setAttribute('width', n.width); rect.setAttribute('height', n.height);
       rect.setAttribute('fill', st.fill); rect.setAttribute('stroke', st.stroke);
       if (st.rx){ rect.setAttribute('rx', st.rx); rect.setAttribute('ry', st.rx); }
       group.appendChild(rect);
+
       if (n.labels){
         const t = document.createElementNS(NS, 'text');
         t.setAttribute('x', 8); t.setAttribute('y', 18);
         t.setAttribute('font-size', '12'); t.textContent = n.labels[0].text;
         group.appendChild(t);
       }
+
       svg.appendChild(group);
+      NODEGROUPS.set(n.id, group);
+
+      group.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        highlightNode(n.id);
+      });
     }
 
-    // Build a nodeData map aligned with lg.children
+    // Build node map + draw
     const NODEDATA = {};
     for (const n of lg.children){
       const orig = NODES.find(x => x.id === n.id) || {kind:'other', inputs:[], outputs:[], label:n.labels?.[0]?.text || ''};
-      NODEDATA[n.id] = { id: n.id, kind: orig.kind, inputs: orig.inputs||[], outputs: orig.outputs||[], label: orig.label, w: n.width, h: n.height, x: n.x+40, y: n.y+40 };
+      NODEDATA[n.id] = { id:n.id, kind:orig.kind, inputs:orig.inputs||[], outputs:orig.outputs||[], label:orig.label,
+                         w:n.width, h:n.height, x:n.x+40, y:n.y+40 };
     }
-
-    // Draw nodes and collect pin anchors
     for (const n of lg.children){
       const nd = NODEDATA[n.id];
       if (nd.kind === 'instance') drawInstance(n, nd);
       else drawSimple(n, nd.kind);
     }
 
-    // Helpers to compute edge endpoints
     function rightSidePoint(n){ return { x: n.x + n.w, y: n.y + n.h/2 }; }
     function leftSidePoint(n){ return { x: n.x, y: n.y + n.h/2 }; }
-
     function getAnchor(nodeId, isSource, pinName){
       const nd = NODEDATA[nodeId];
       if (!nd) return { x: 0, y: 0 };
       if (nd.kind === 'instance' && pinName){
-        // sources leave from right pins, sinks enter at left pins
         if (isSource){
           const y = ANCH[nodeId]?.out?.[pinName];
           if (y !== undefined) return { x: nd.x + nd.w, y };
@@ -233,11 +245,10 @@
           if (y !== undefined) return { x: nd.x, y };
         }
       }
-      // fallback to center sides
       return isSource ? rightSidePoint(nd) : leftSidePoint(nd);
     }
 
-    // Create defs (arrow)
+    // Arrow marker
     const defs = document.createElementNS(NS, 'defs');
     const marker = document.createElementNS(NS, 'marker');
     marker.setAttribute('id','arrow'); marker.setAttribute('markerWidth','10');
@@ -247,14 +258,57 @@
     arrow.setAttribute('points','0 0, 10 3.5, 0 7'); arrow.setAttribute('fill','#999');
     marker.appendChild(arrow); defs.appendChild(marker); svg.appendChild(defs);
 
-    const tip = document.getElementById('tip');
-    function setTip(x,y,html){ tip.style.left = (x+12)+'px'; tip.style.top = (y+12)+'px'; tip.innerHTML = html; tip.style.opacity = 1; }
-    function hideTip(){ tip.style.opacity = 0; }
+    // ==== Edge rendering with highlight support ====
+    const PATHS = new Set();               // all path elements
+    const LABEL_TO_PATH = new Map();       // text -> path
+    const EDGES_BY_NODE = new Map();       // nodeId -> Set(path)
 
-    // Render edges (with bus grouping toggle)
+    function registerEdgePath(pathEl, sId, tId){
+      PATHS.add(pathEl);
+      LABEL_TO_PATH.set(pathEl.__labelEl, pathEl);
+      (EDGES_BY_NODE.get(sId) || EDGES_BY_NODE.set(sId, new Set()).get(sId)).add(pathEl);
+      (EDGES_BY_NODE.get(tId) || EDGES_BY_NODE.set(tId, new Set()).get(tId)).add(pathEl);
+    }
+
+    function clearHighlights(){
+      [...svg.querySelectorAll('.dim')].forEach(el => el.classList.remove('dim'));
+      [...svg.querySelectorAll('.hi-edge')].forEach(el => el.classList.remove('hi-edge'));
+      [...svg.querySelectorAll('.hi-node')].forEach(el => el.classList.remove('hi-node'));
+      hideTip();
+    }
+
+    function applyHighlight(selectedPaths, nodeIds){
+      // dim everything
+      PATHS.forEach(p => { if (!selectedPaths.has(p)) p.classList.add('dim'); else p.classList.add('hi-edge'); });
+      [...svg.querySelectorAll('text[data-edgelabel]')].forEach(lbl => {
+        const p = LABEL_TO_PATH.get(lbl);
+        if (!selectedPaths.has(p)) lbl.classList.add('dim'); else lbl.classList.remove('dim');
+      });
+      // nodes
+      NODEGROUPS.forEach((g,id) => {
+        if (!nodeIds.has(id)) g.classList.add('dim');
+        else g.classList.add('hi-node');
+      });
+    }
+
+    function highlightEdge(pathEl){
+      const sId = pathEl.dataset.source, tId = pathEl.dataset.target;
+      const selected = new Set([pathEl]);
+      const nodes = new Set([sId, tId]);
+      applyHighlight(selected, nodes);
+    }
+
+    function highlightNode(nodeId){
+      const paths = EDGES_BY_NODE.get(nodeId) || new Set();
+      const nodes = new Set([nodeId]);
+      paths.forEach(p => { nodes.add(p.dataset.source); nodes.add(p.dataset.target); });
+      applyHighlight(paths, nodes);
+    }
+
     function renderEdges(){
-      // Clear old edges/text
+      // clear old
       [...svg.querySelectorAll('path[data-edge], text[data-edgelabel]')].forEach(el => el.remove());
+      PATHS.clear(); LABEL_TO_PATH.clear(); EDGES_BY_NODE.clear();
 
       const groupBuses = document.getElementById('groupBuses').checked;
 
@@ -268,9 +322,11 @@
         Object.values(groups).forEach(group => {
           const e = group[0];
           const sId = e.sources[0], tId = e.targets[0];
-          const s = getAnchor(sId, true, e.src_pin?.split('.').slice(-1)[0] || '');
-          const t = getAnchor(tId, false, e.dst_pin?.split('.').slice(-1)[0] || '');
-          // simple single curve
+          const srcPin = e.src_pin?.split('.').slice(-1)[0] || '';
+          const dstPin = e.dst_pin?.split('.').slice(-1)[0] || '';
+          const s = getAnchor(sId, true,  srcPin);
+          const t = getAnchor(tId, false, dstPin);
+
           const path = document.createElementNS(NS, 'path');
           const d = `M ${s.x} ${s.y} C ${s.x+60} ${s.y}, ${t.x-60} ${t.y}, ${t.x} ${t.y}`;
           path.setAttribute('d', d);
@@ -279,7 +335,6 @@
           path.setAttribute('data-edge','1');
           path.dataset.source = sId; path.dataset.target = tId;
 
-          // label: base [N]
           const base = e.base || e.labels?.[0]?.text || '';
           const lbl = document.createElementNS(NS, 'text');
           const midx = (s.x + t.x) / 2, midy = (s.y + t.y) / 2 - 6;
@@ -287,8 +342,9 @@
           lbl.setAttribute('font-size','11'); lbl.setAttribute('text-anchor','middle');
           lbl.setAttribute('fill','#444'); lbl.setAttribute('data-edgelabel','1');
           lbl.textContent = `${base} [${group.length}]`;
+          path.__labelEl = lbl;
 
-          // tooltip lists all signals with pins
+          // Tooltip shows all slice labels with pins
           path.addEventListener('mousemove', ev => {
             const list = group.map(g => {
               const name = g.labels?.[0]?.text || '';
@@ -299,14 +355,15 @@
           });
           path.addEventListener('mouseleave', hideTip);
 
-          // isolate on click
-          path.addEventListener('click', () => isolateEdges(new Set(group.map(x => x.id)), new Set([sId,tId])));
+          // Click highlight (works in grouped mode)
+          path.addEventListener('click', (ev) => { ev.stopPropagation(); clearHighlights(); highlightEdge(path); });
 
           svg.appendChild(path); svg.appendChild(lbl);
+          registerEdgePath(path, sId, tId);
         });
 
       } else {
-        // No grouping: draw each edge, fan multiple between same pair by offset
+        // Ungrouped: draw all edges, fan between same pair
         const pairGroups = {};
         for (const e of lg.edges){
           const key = e.sources[0] + '→' + e.targets[0];
@@ -320,7 +377,7 @@
             const sId = e.sources[0], tId = e.targets[0];
             const srcPin = e.src_pin?.split('.').slice(-1)[0] || '';
             const dstPin = e.dst_pin?.split('.').slice(-1)[0] || '';
-            const s = getAnchor(sId, true, srcPin);
+            const s = getAnchor(sId, true,  srcPin);
             const t = getAnchor(tId, false, dstPin);
             const offset = (k - (n-1)/2) * OFFSET_STEP;
 
@@ -341,49 +398,29 @@
             lbl.setAttribute('font-size','11'); lbl.setAttribute('text-anchor','middle');
             lbl.setAttribute('fill','#555'); lbl.setAttribute('data-edgelabel','1');
             lbl.textContent = e.labels?.[0]?.text || '';
+            path.__labelEl = lbl;
 
-            // tooltip
             path.addEventListener('mousemove', ev => {
               const meta = (e.src_pin && e.dst_pin) ? `${e.src_pin} → ${e.dst_pin}` : '';
               setTip(ev.clientX, ev.clientY, `<div style="font-weight:600">${lbl.textContent}</div>${meta ? `<div class="hint">${meta}</div>`:''}`);
             });
             path.addEventListener('mouseleave', hideTip);
-
-            // isolate on click
-            path.addEventListener('click', () => isolateEdges(new Set([e.id]), new Set([sId,tId])));
+            path.addEventListener('click', (ev) => { ev.stopPropagation(); clearHighlights(); highlightEdge(path); });
 
             svg.appendChild(path); svg.appendChild(lbl);
+            registerEdgePath(path, sId, tId);
           });
         });
       }
     }
 
-    // Isolate edges/nodes
-    function isolateEdges(edgeIds, nodeIds){
-      const allEdges = [...svg.querySelectorAll('path[data-edge]')];
-      const allLabels = [...svg.querySelectorAll('text[data-edgelabel]')];
-      const allNodes = lg.children.map(n => n.id);
-
-      allEdges.forEach(p => p.classList.toggle('dim', !edgeIds.has(p.dataset.edgeId || '')));
-      allLabels.forEach(t => t.classList.toggle('dim', !edgeIds.has(t.dataset.edgeId || '')));
-      for (const n of allNodes){
-        const isInvolved = nodeIds.has(n);
-        // dim corresponding <g> by proximity: simple approach, dim all non-involved labels/rects
-      }
-      // Dim node groups by drawing an overlay: simpler — dim everything then undim involved?
-      // Since nodes are not grouped with IDs, keep isolation to edges for now (effective for readability).
-    }
-
-    // First render
     renderEdges();
 
-    // Handlers
-    document.getElementById('groupBuses').addEventListener('change', renderEdges);
-    document.getElementById('resetView').addEventListener('click', () => {
-      // clear isolation dimming
-      [...svg.querySelectorAll('.dim')].forEach(el => el.classList.remove('dim'));
-    });
-    window.addEventListener('keydown', e => { if (e.key === 'Escape'){ [...svg.querySelectorAll('.dim')].forEach(el => el.classList.remove('dim')); hideTip(); }});
+    // Interactions
+    document.getElementById('groupBuses').addEventListener('change', () => { clearHighlights(); renderEdges(); });
+    document.getElementById('resetView').addEventListener('click', clearHighlights);
+    svg.addEventListener('click', clearHighlights); // background click clears
+    window.addEventListener('keydown', e => { if (e.key === 'Escape') clearHighlights(); });
   });
 </script>
 </body>
