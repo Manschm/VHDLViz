@@ -9,14 +9,12 @@ def _load_template(name: str) -> str:
 
 def write_dependency_html(out_path: pathlib.Path, db):
     tpl = _load_template("dep_template.html")
-    nodes = []
-    id_for = {}
+    nodes, id_for, edges = [], {}, []
     for i, f in enumerate(db.files):
         fid = f"f{i}"
         id_for[str(f.path)] = fid
         label = f.entity_name or pathlib.Path(f.path).name
         nodes.append({"data": {"id": fid, "label": label, "path": str(f.path)}})
-    edges = []
     for src, dst in db.dependencies:
         if src in id_for and dst in id_for:
             edges.append({"data": {"id": f"e_{id_for[src]}_{id_for[dst]}",
@@ -32,13 +30,23 @@ def write_block_html(out_path: pathlib.Path, fi: FileInfo, entity_port_db: Dict[
         "ports": [p.__dict__ for p in fi.ports],
         "signals": [s.__dict__ for s in fi.signals],
         "instances": [
-            {
-                "label": inst.label,
-                "component_name": inst.component_name,
-                "entity_ref": inst.entity_ref,
-                "port_map": inst.port_map
-            } for inst in fi.instances
+            {"label": inst.label, "component_name": inst.component_name,
+             "entity_ref": inst.entity_ref, "port_map": inst.port_map}
+            for inst in fi.instances
         ],
         "graph": graph
     }
     out_path.write_text(tpl.replace("/*__BLOCK_DATA__*/", json.dumps(payload)), encoding="utf-8")
+
+def write_designer_html(out_path: pathlib.Path):
+    """
+    Writes a standalone SPA that:
+      - loads ./design_db.json
+      - allows drag/drop of entities into a canvas
+      - lets user add top-level ports & internal signals
+      - connects pins to build a netlist
+      - exports .vviz.json and .vhd (client-side codegen)
+      - can import an existing .vviz.json to continue editing
+    """
+    tpl = _load_template("designer_template.html")
+    out_path.write_text(tpl, encoding="utf-8")

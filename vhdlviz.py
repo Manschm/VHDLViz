@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 import argparse, json, sys, os, pathlib
 from parser import parse_vhdl_file
-from model import DesignDB, FileInfo
-from visualize import write_dependency_html, write_block_html
-from typing import Dict
-from model import Port
+from model import DesignDB, FileInfo, Port
+from visualize import write_dependency_html, write_block_html, write_designer_html
 
 def discover_files(roots):
     exts = {".vhd", ".vhdl"}
@@ -20,7 +18,6 @@ def discover_files(roots):
     return sorted(set(files))
 
 def build_entity_index(file_infos):
-    # entity name -> file path (first wins, warn on duplicates)
     idx = {}
     for fi in file_infos:
         if fi.entity_name:
@@ -31,12 +28,10 @@ def build_entity_index(file_infos):
     return idx
 
 def compute_dependencies(file_infos, entity_index):
-    # Dependency edges: file A -> file B if A instantiates entity whose file is B
     deps = []
     for fi in file_infos:
         targets = set()
         for inst in fi.instances:
-            # prefer explicit entity target if present
             target_entity = inst.entity_ref or inst.component_name
             if target_entity and target_entity in entity_index:
                 tgt_path = pathlib.Path(entity_index[target_entity]).resolve()
@@ -47,11 +42,11 @@ def compute_dependencies(file_infos, entity_index):
     return sorted(set(deps))
 
 def main():
-    ap = argparse.ArgumentParser(description="VHDL Visualizer (v0.1)")
-    ap.add_argument("--roots", nargs="+", required=True,
-                    help="Folders to scan for .vhd/.vhdl files")
+    ap = argparse.ArgumentParser(description="VHDL Visualizer (v0.3 designer skeleton)")
+    ap.add_argument("--roots", nargs="+", required=True, help="Folders to scan for .vhd/.vhdl files")
     ap.add_argument("--out", default="build", help="Output folder")
-    ap.add_argument("--open", action="store_true", help="Try to open index.html after generation")
+    ap.add_argument("--open", action="store_true", help="Open dependency graph after generation")
+    ap.add_argument("--designer", action="store_true", help="Open the designer after generation")
     args = ap.parse_args()
 
     outdir = pathlib.Path(args.out)
@@ -77,34 +72,44 @@ def main():
     entity_index = build_entity_index(file_infos)
     deps = compute_dependencies(file_infos, entity_index)
 
-    # Build DB
+    # DB
     db = DesignDB.from_files(file_infos, deps)
     db_json_path = outdir / "design_db.json"
     db_json_path.write_text(json.dumps(db.to_json(), indent=2), encoding="utf-8")
-    
-    entity_port_db: Dict[str, Dict[str, Port]] = {}
+
+    # Dependency graph
+    index_path = outdir / "index.html"
+    write_dependency_html(index_path, db)
+
+    # Block views
+    # Build entity_port_db for pin directions
+    entity_port_db = {}
     for fi in file_infos:
         if fi.entity_name:
             entity_port_db[fi.entity_name] = {p.name: p for p in fi.ports}
 
-    # Write dependency graph HTML
-    index_path = outdir / "index.html"
-    write_dependency_html(index_path, db)
-
-    # Write per-file block views
     for fi in file_infos:
-        # Note: we use entity name if present, else filename stem
         label = fi.entity_name or fi.path.stem
         p = block_dir / f"{label}.html"
         write_block_html(p, fi, entity_port_db)
 
-    print(f"[ok] Generated:\n- {index_path}\n- {db_json_path}\n- {block_dir}/<file>.html")
+    # Designer
+    designer_path = outdir / "designer.html"
+    write_designer_html(designer_path)
+
+    print(f"[ok] Generated:\n- {index_path}\n- {db_json_path}\n- {block_dir}/<file>.html\n- {designer_path}")
     if args.open:
         try:
             import webbrowser
             webbrowser.open(index_path.as_uri())
         except Exception as e:
-            print(f"[warn] Could not open in browser: {e}", file=sys.stderr)
+            print(f"[warn] Could not open index: {e}", file=sys.stderr)
+    if args.designer:
+        try:
+            import webbrowser
+            webbrowser.open(designer_path.as_uri())
+        except Exception as e:
+            print(f"[warn] Could not open designer: {e}", file=sys.stderr)
 
 if __name__ == "__main__":
     main()
