@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>VHDL Visualizer – File Dependencies</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <style>
+    html, body { height: 100%; margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, sans-serif; }
+    #app { display:grid; grid-template-rows:auto 1fr; height:100%; }
+    header { padding:10px 12px; border-bottom:1px solid #ddd; display:flex; gap:12px; align-items:center; }
+    #search { flex:1; padding:8px 10px; border:1px solid #ccc; border-radius:8px; }
+    #cy { height: calc(100vh - 58px); }
+    .btn { padding:8px 10px; border:1px solid #ccc; border-radius:8px; cursor:pointer; background:#f8f8f8; }
+  </style>
+  <script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
+  <script>
+    const DATA = /*__DATA__*/
+  </script>
+</head>
+<body>
+<div id="app">
+  <header>
+    <strong>VHDL Visualizer — Dependencies</strong>
+    <input id="search" placeholder="Filter files/entities..."/>
+    <button class="btn" id="reset">Reset view</button>
+  </header>
+  <div id="cy"></div>
+</div>
+<script>
+  const cy = cytoscape({
+    container: document.getElementById('cy'),
+    elements: [...DATA.nodes, ...DATA.edges],
+    style: [
+      { selector: 'node', style: {
+          'label': 'data(label)',
+          'text-valign': 'center',
+          'text-halign': 'center',
+          'background-color': '#7aa2ff',
+          'width': 'label',
+          'height': 'label',
+          'padding': '8px',
+          'border-width': 1,
+          'border-color': '#2d4c9b',
+          'font-size': 12
+      }},
+      { selector: 'edge', style: {
+          'curve-style': 'bezier',
+          'target-arrow-shape': 'triangle',
+          'target-arrow-color': '#888',
+          'line-color': '#aaa',
+          'width': 1.5
+      }},
+      { selector: '.faded', style: { 'opacity': 0.1 } }
+    ],
+    layout: { name: 'cose', animate: true, idealEdgeLength: 150, nodeOverlap: 10 }
+  });
+
+  cy.on('tap', 'node', evt => {
+    const n = evt.target;
+    const label = n.data('label');
+    // Block view files live in ./blocks/<entity-or-stem>.html
+    window.open('blocks/' + encodeURIComponent(label) + '.html', '_blank');
+  });
+
+  const search = document.getElementById('search');
+  search.addEventListener('input', () => {
+    const q = search.value.trim().toLowerCase();
+    if (!q) { cy.elements().removeClass('faded'); return; }
+    cy.nodes().forEach(n => {
+      const hit = (n.data('label') || '').toLowerCase().includes(q);
+      n.toggleClass('faded', !hit);
+    });
+    cy.edges().addClass('faded');
+  });
+
+  document.getElementById('reset').onclick = () => {
+    search.value = '';
+    cy.elements().removeClass('faded');
+    cy.fit(cy.elements(), 50);
+  };
+</script>
+</body>
+</html>

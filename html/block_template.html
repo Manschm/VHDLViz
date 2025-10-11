@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>VHDL Visualizer – Block</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <style>
+    html, body { height: 100%; margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, sans-serif; }
+    #app { display:grid; grid-template-columns: 300px 1fr; height:100%; }
+    #sidebar { border-right:1px solid #ddd; padding:10px; overflow:auto; }
+    #canvas { position:relative; }
+    #title { font-weight:600; margin-bottom:8px; }
+    .section { margin: 12px 0; }
+    .tag { display:inline-block; padding:2px 6px; border:1px solid #ddd; border-radius:6px; margin:2px; font-size:12px; }
+    .key { font-weight:600; }
+    #elk { width: 100%; height: 100%; }
+    .hint { color:#666; font-size:12px; }
+  </style>
+  <script src="https://unpkg.com/elkjs@0.9.3/lib/elk.bundled.js"></script>
+  <script>
+    const DATA = /*__BLOCK_DATA__*/
+  </script>
+</head>
+<body>
+<div id="app">
+  <div id="sidebar">
+    <div id="title">Block: <span id="ent"></span></div>
+    <div class="section">
+      <div class="key">File</div>
+      <div><code id="path"></code></div>
+    </div>
+    <div class="section">
+      <div class="key">Ports</div>
+      <div id="ports"></div>
+    </div>
+    <div class="section">
+      <div class="key">Signals</div>
+      <div id="signals"></div>
+    </div>
+    <div class="section">
+      <div class="key">Instances</div>
+      <div id="instances"></div>
+    </div>
+    <div class="section hint">v0.1: connections are not yet drawn. Next step is wiring nets.</div>
+  </div>
+  <div id="canvas">
+    <svg id="elk"></svg>
+  </div>
+</div>
+<script>
+  // Sidebar
+  document.getElementById('ent').textContent = DATA.file.entity;
+  document.getElementById('path').textContent = DATA.file.path;
+
+  const portsDiv = document.getElementById('ports');
+  DATA.ports.forEach(p => {
+    const span = document.createElement('span');
+    span.className = 'tag';
+    span.textContent = `${p.name}: ${p.direction} ${p.dtype}`;
+    portsDiv.appendChild(span);
+  });
+
+  const sigDiv = document.getElementById('signals');
+  DATA.signals.forEach(s => {
+    const span = document.createElement('span');
+    span.className = 'tag';
+    span.textContent = `${s.name}: ${s.dtype}`;
+    sigDiv.appendChild(span);
+  });
+
+  const instDiv = document.getElementById('instances');
+  DATA.instances.forEach(i => {
+    const div = document.createElement('div');
+    div.style.margin = '4px 0';
+    const head = document.createElement('div');
+    head.innerHTML = `<span class="key">${i.label}</span> : ${(i.entity_ref||i.component_name||'?')}`;
+    div.appendChild(head);
+    if (i.port_map && Object.keys(i.port_map).length) {
+      const pm = document.createElement('div');
+      pm.style.fontSize = '12px';
+      pm.style.color = '#333';
+      pm.textContent = Object.entries(i.port_map).map(([k,v]) => `${k} => ${v}`).join(', ');
+      div.appendChild(pm);
+    }
+    instDiv.appendChild(div);
+  });
+
+  // Simple ELK auto-layout demo: left = entity ports, right = instances, middle = "logic" stub
+  const elk = new ELK();
+  const g = {
+    id: "root",
+    layoutOptions: {
+      'elk.algorithm': 'layered',
+      'elk.direction': 'RIGHT',
+      'elk.layered.spacing.nodeNodeBetweenLayers': '80',
+      'elk.spacing.componentComponent': '60'
+    },
+    children: [
+      { id: "ports", width: 120, height: 30, labels: [{text: "ENTITY PORTS"}]},
+      { id: "logic", width: 160, height: 60, labels: [{text: "COMB/SEQ LOGIC (stub)"}]},
+      // one node per instance
+      ...DATA.instances.map((i, idx) => ({
+        id: `inst_${idx}`,
+        width: 160,
+        height: 40,
+        labels: [{text: `${i.label} : ${(i.entity_ref||i.component_name||'?')}`}]
+      }))
+    ],
+    edges: [
+      // just align flow: ports -> logic -> instances (visual hint only for v0.1)
+      ...DATA.instances.map((i, idx) => ({ id:`e0_${idx}`, sources:["ports"], targets:[`inst_${idx}`]}))
+    ]
+  };
+
+  elk.layout(g).then(lg => {
+    const svg = document.getElementById('elk');
+    const NS = "http://www.w3.org/2000/svg";
+    svg.setAttribute('viewBox', `0 0 ${lg.width+40} ${lg.height+40}`);
+
+    function drawNode(n) {
+      const group = document.createElementNS(NS, 'g');
+      group.setAttribute('transform', `translate(${n.x+20}, ${n.y+20})`);
+      const rect = document.createElementNS(NS, 'rect');
+      rect.setAttribute('rx', '10'); rect.setAttribute('ry', '10');
+      rect.setAttribute('width', n.width); rect.setAttribute('height', n.height);
+      rect.setAttribute('fill', '#eef3ff'); rect.setAttribute('stroke', '#99b2ff');
+      group.appendChild(rect);
+      if (n.labels) {
+        n.labels.forEach(l => {
+          const t = document.createElementNS(NS, 'text');
+          t.setAttribute('x', 8); t.setAttribute('y', 20);
+          t.setAttribute('font-size', '12');
+          t.textContent = l.text;
+          group.appendChild(t);
+        });
+      }
+      svg.appendChild(group);
+    }
+    function centerOf(n) { return { x: n.x+20+n.width/2, y: n.y+20+n.height/2 }; }
+    function find(id) { return lg.children.find(c => c.id===id); }
+
+    lg.children.forEach(drawNode);
+    lg.edges.forEach(e => {
+      const s = find(e.sources[0]), t = find(e.targets[0]);
+      if (!s || !t) return;
+      const p1 = centerOf(s), p2 = centerOf(t);
+      const path = document.createElementNS(NS, 'path');
+      const d = `M ${p1.x} ${p1.y} C ${p1.x+60} ${p1.y}, ${p2.x-60} ${p2.y}, ${p2.x} ${p2.y}`;
+      path.setAttribute('d', d);
+      path.setAttribute('fill', 'none');
+      path.setAttribute('stroke', '#bbb');
+      path.setAttribute('stroke-width', '1.5');
+      svg.appendChild(path);
+    });
+  });
+</script>
+</body>
+</html>

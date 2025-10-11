@@ -1,32 +1,47 @@
 import re
 
-RX = {}
+FLAGS = re.IGNORECASE | re.DOTALL | re.MULTILINE
 
-# Whitespace for cleaning
-RX["WS"] = re.compile(r"\s+", re.MULTILINE)
-
-# Comments
-RX['LINE_COMMENT']  = re.compile(r"--.*?$", re.MULTILINE)
-RX["BLOCK_COMMENT"] = re.compile(
-    r"/\*.*?\*/", re.DOTALL
-)  # rarely used in VHDL, but harmless to strip
-
-# entity <name> is … end [entity] <name>;
-RX["ENTITY_DEF"] = re.compile(
-    r"(?i)\bentity\s+(?P<name>\w+)\s+is[\s\S]*?end\s+(?:entity\s+)?(?P=name)\s*;"
+# ENTITY with optional PORT section
+ENTITY_RE = re.compile(
+    r"\bentity\s+(?P<name>\w+)\s+is\s*"
+    r"(?:.*?\bport\s*\((?P<ports>.*?)\)\s*;\s*)?"
+    r"end\s+(?:entity\s+)?(?P=name)\s*;",
+    FLAGS,
 )
 
-# signal foo : std_logic;  |  signal a,b : std_logic_vector(7 downto 0);
-RX["SIGNAL_DECL"] = re.compile(
-    r"(?is)\bsignal\s+([a-zA-Z_]\w*(?:\s*,\s*[a-zA-Z_]\w*)*)\s*:\s*([^;]+);"
+# Individual port lines inside the PORT(...) group
+# Roughly: name[s] : [in|out|inout|buffer|linkage] type [; or )]
+PORT_LINE_RE = re.compile(
+    r"(?P<names>[\w,\s]+?)\s*:\s*(?P<dir>inout|in|out|buffer|linkage)\s+(?P<dtype>[^;]+?)(?:;|$)",
+    re.IGNORECASE,
 )
 
-# label: entity work.some_entity [generic map(...)] port map (...);
-# or   label: some_component port map(...);
-RX["COMP_OR_ENTITY_INST"] = re.compile(
-    r"(?is)\b(?P<label>[a-zA-Z_]\w*)\s*:\s*(?P<is_entity>entity\s+\w+\.)?(?P<type>[a-zA-Z_]\w*)"
-    r"(?:\s*generic\s*map\s*\((?P<generics>.*?)\))?\s*port\s*map\s*\((?P<ports>.*?)\)\s*;"
+# SIGNAL declarations (top-level architecture only for v0.1)
+SIGNAL_RE = re.compile(
+    r"(?<!\w)\bsignal\s+(?P<name>\w+)\s*:\s*(?P<dtype>[^;]+);",
+    FLAGS,
 )
 
-# formal => actual pairs inside port map
-RX["PORT_ASSOC"] = re.compile(r"(?is)\b([a-zA-Z_]\w*)\s*=>\s*([^,\)]+)")
+# Component-style instantiation: u1 : my_comp (generic map ...)? port map (...)
+COMP_INST_RE = re.compile(
+    r"(?P<label>\w+)\s*:\s*(?P<comp>\w+)\s*"
+    r"(?:generic\s+map\s*\((?P<gmap>.*?)\)\s*)?"
+    r"port\s+map\s*\((?P<pmap>.*?)\)\s*;",
+    FLAGS,
+)
+
+# Direct entity instantiation: u1 : entity work.my_ent ... port map (...)
+ENTITY_INST_RE = re.compile(
+    r"(?P<label>\w+)\s*:\s*entity\s+(?P<lib>\w+)\s*\.\s*(?P<ent>\w+)\s*"
+    r"(?:\((?P<arch>\w+)\))?\s*"
+    r"(?:generic\s+map\s*\((?P<gmap>.*?)\)\s*)?"
+    r"port\s+map\s*\((?P<pmap>.*?)\)\s*;",
+    FLAGS,
+)
+
+# Port map assignments: formal => actual
+PMAP_KV_RE = re.compile(
+    r"(?P<formal>\w+)\s*=>\s*(?P<actual>[^,()]+)(?:,|$)",
+    re.IGNORECASE,
+)
