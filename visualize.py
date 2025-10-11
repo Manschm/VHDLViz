@@ -26,10 +26,7 @@ def write_dependency_html(out_path: pathlib.Path, db):
 
 def write_block_html(out_path: pathlib.Path, fi: FileInfo, entity_port_db: Dict[str, Dict[str, Port]]):
     tpl = _load_template("block_template.html")
-
-    # Build wiring graph
     graph = build_wiring(fi, entity_port_db)
-
     payload = {
         "file": {"path": str(fi.path), "entity": fi.entity_name or fi.path.stem},
         "ports": [p.__dict__ for p in fi.ports],

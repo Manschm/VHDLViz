@@ -14,6 +14,11 @@ class Signal:
     dtype: str
 
 @dataclass
+class Assignment:
+    target: str        # signal name on LHS
+    expr: str          # RHS expression (raw)
+
+@dataclass
 class Instance:
     label: str                    # u1, etc.
     component_name: Optional[str] # if "u1 : my_comp"
@@ -26,6 +31,7 @@ class FileInfo:
     entity_name: Optional[str]
     ports: List[Port] = field(default_factory=list)
     signals: List[Signal] = field(default_factory=list)
+    assignments: List[Assignment] = field(default_factory=list)
     instances: List[Instance] = field(default_factory=list)
 
     def to_json(self):

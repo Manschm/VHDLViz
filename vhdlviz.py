@@ -81,6 +81,7 @@ def main():
     db = DesignDB.from_files(file_infos, deps)
     db_json_path = outdir / "design_db.json"
     db_json_path.write_text(json.dumps(db.to_json(), indent=2), encoding="utf-8")
+    
     entity_port_db: Dict[str, Dict[str, Port]] = {}
     for fi in file_infos:
         if fi.entity_name:
