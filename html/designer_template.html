@@ -602,12 +602,54 @@ function ensureSignalExistsBase(sig){
   }
 }
 
+// Global listeners for ghost path and commit on mouseup / cancel on ESC
+window.addEventListener('mousemove', (ev)=>{
+  if (connectMode) updateGhost(ev.clientX, ev.clientY);
+});
+window.addEventListener('mouseup', ()=>{
+  if (connectMode) endConnect(!!connectMode.hoverPin);
+});
+window.addEventListener('keydown', (e)=>{
+  if (e.key === 'Escape' && connectMode) { e.preventDefault(); endConnect(false); }
+});
+
 // Draw everything
 function render(){
   svg.innerHTML='';
   const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   g.setAttribute('transform', `translate(${view.x},${view.y}) scale(${view.k})`);
   svg.appendChild(g);
+
+  // helpers
+  function attachPinHandlers(pinG){
+    pinG.addEventListener('mousedown', (ev)=>{
+      ev.stopPropagation();
+      const nodeId = pinG.dataset.nodeId;
+      const pin = pinG.dataset.pin;
+      const role = pinG.dataset.role; // 'driver' | 'sink'
+      // find anchorFn for this pin
+      const reg = PIN_REGISTRY.find(p => p.el === pinG);
+      startConnect({ nodeId, pin, role, anchorFn: reg.anchorFn });
+    });
+    pinG.addEventListener('mouseover', ()=>{
+      if (!connectMode) return;
+      // Only mark as hover if compatible and not itself
+      const nodeId = pinG.dataset.nodeId, pin = pinG.dataset.pin, role = pinG.dataset.role;
+      const ok = (connectMode.from.role === 'driver' && role === 'sink') ||
+                (connectMode.from.role === 'sink'   && role === 'driver');
+      if (ok && !(connectMode.from.nodeId === nodeId && connectMode.from.pin === pin)) {
+        connectMode.hoverPin = {
+          nodeId, pin, role,
+          anchorFn: PIN_REGISTRY.find(p => p.el === pinG).anchorFn
+        };
+      } else {
+        connectMode.hoverPin = null;
+      }
+    });
+    pinG.addEventListener('mouseleave', ()=>{
+      if (connectMode) connectMode.hoverPin = null;
+    });
+  }
 
   // grid
   const grid = document.createElementNS(svg.namespaceURI, 'path');
@@ -679,6 +721,8 @@ function render(){
     title.setAttribute('x', n.x+8); title.setAttribute('y', n.y+18);
     title.setAttribute('font-size','12'); title.textContent = n.label;
     grp.appendChild(title);
+
+    //TODO: insert code here???
 
     // Pins for instances
     if(n.kind==='instance'){
