@@ -24,6 +24,10 @@
     .hi-edge { stroke:#3b82f6 !important; stroke-width: 3 !important; }
     .dim { opacity:0.15 }
     #tip { position: fixed; pointer-events: none; background:#111; color:#fff; padding:6px 8px; border-radius:6px; font-size:12px; opacity:0; transition:opacity .08s ease; max-width: 460px; }
+    .pin-eligible text { text-decoration: underline; }
+    .pin-eligible circle { filter: drop-shadow(0 0 2px #3b82f6); }
+    .pin-hit { cursor: crosshair; }
+    .btn-danger { border-color:#d66; background:#fbe9e9; }
   </style>
 </head>
 <body>
@@ -33,6 +37,7 @@
     <button class="btn" id="newOutput">Add output port</button>
     <button class="btn" id="newSignal">Add signal</button>
     <button class="btn" id="groupBuses">Group buses</button>
+    <button class="btn btn-danger" id="deleteSel">Delete</button>
     <div style="flex:1"></div>
     <button class="btn" id="importVVIZ">Import .vviz.json</button>
     <button class="btn" id="exportVVIZ">Export .vviz.json</button>
@@ -119,6 +124,13 @@ function download(filename, text){
   URL.revokeObjectURL(url);
 }
 function portDirText(d){ return d.toLowerCase(); }
+// Grid
+const GRID = 16;
+const GRID_SNAP = v => Math.round(v / GRID) * GRID;
+
+function snapPoint(pt) {
+  return { x: GRID_SNAP(pt.x), y: GRID_SNAP(pt.y) };
+}
 
 // ---------- Load design_db ----------
 const lib = { entities: {} }; // entityName -> {ports:[{name,direction,dtype}]}
@@ -203,12 +215,75 @@ function suggestInstanceId(ent){
 function clientToWorld(cx, cy){ const r = svg.getBoundingClientRect(); const x = (cx - r.left - view.x)/view.k; const y = (cy - r.top - view.y)/view.k; return {x,y}; }
 
 // Selection & highlight
-let selectedEdges = new Set();
-let selectedNodes = new Set();
+let selectedEdges = new Set();     // stores path elements
+let selectedNodes = new Set();     // stores node ids
+
 function clearSelection(){
   selectedEdges.clear(); selectedNodes.clear();
   [...svg.querySelectorAll('.hi-edge,.hi-node,.dim')].forEach(n=>n.classList.remove('hi-edge','hi-node','dim'));
 }
+
+function enableDeleteHandlers(){
+  function doDelete(){
+    // delete selected edges
+    selectedEdges.forEach(path => {
+      const edges = path.__edges || [];  // list of underlying edge objects
+      edges.forEach(e => {
+        // Remove mapping on the instance side that holds the formal
+        const sinkIsInst = e.tNode.startsWith('inst::');
+        const srcIsInst  = e.sNode.startsWith('inst::');
+        if (sinkIsInst) {
+          const instId = e.tNode.replace('inst::','');
+          const formal = e.tPin.split('.').slice(-1)[0];
+          const inst = model.instances.find(i => i.id === instId);
+          if (inst && inst.port_map) delete inst.port_map[formal];
+        } else if (srcIsInst) {
+          // case: instance output -> top-level output
+          const instId = e.sNode.replace('inst::','');
+          const formal = e.sPin.split('.').slice(-1)[0];
+          const inst = model.instances.find(i => i.id === instId);
+          if (inst && inst.port_map) delete inst.port_map[formal];
+        }
+      });
+    });
+
+    // delete selected nodes
+    selectedNodes.forEach(nodeId => {
+      if (nodeId.startsWith('inst::')) {
+        const id = nodeId.replace('inst::','');
+        model.instances = model.instances.filter(i => i.id !== id);
+        delete model.ui.nodes[id];
+      } else if (nodeId.startsWith('port::')) {
+        const name = nodeId.replace('port::','');
+        // remove top-level port
+        model.ports = model.ports.filter(p => p.name !== name);
+        delete model.ui.nodes[nodeId];
+        // purge any port_map entry that references this base (e.g., data or data(0))
+        model.instances.forEach(i => {
+          Object.keys(i.port_map||{}).forEach(f => {
+            const a = i.port_map[f];
+            const base = (a.match(/^([A-Za-z_]\w*)\s*\(/)?.[1]) || a;
+            if (base === name) delete i.port_map[f];
+          });
+        });
+      }
+    });
+
+    clearSelection();
+    refreshMetaLists();
+    render();
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      // Prevent Backspace navigating away
+      e.preventDefault();
+      doDelete();
+    }
+  });
+  document.getElementById('deleteSel').addEventListener('click', doDelete);
+}
+enableDeleteHandlers();
 window.addEventListener('keydown', e=>{ if(e.key==='Escape') clearSelection(); });
 svg.addEventListener('click', ev=>{ if(ev.target===svg) clearSelection(); });
 
