@@ -722,7 +722,35 @@ function render(){
     title.setAttribute('font-size','12'); title.textContent = n.label;
     grp.appendChild(title);
 
-    //TODO: insert code here???
+    // Top-level port pin hit-area (one pin per port)
+    if (n.kind === 'entity_in' || n.kind === 'entity_out') {
+      const role = (n.kind === 'entity_in') ? 'driver' : 'sink';
+      const y = GRID_SNAP(n.y + n.h/2);
+      const x = (role === 'driver') ? (n.x + n.w) : n.x;
+
+      const pinG = document.createElementNS(svg.namespaceURI, 'g');
+      pinG.classList.add('pin-hit');
+      pinG.dataset.nodeId = n.id;
+      pinG.dataset.pin = n.id;     // reuse node id as pin id
+      pinG.dataset.role = role;
+
+      // slightly larger invisible hitbox to make it easy to grab
+      const hb = document.createElementNS(svg.namespaceURI, 'rect');
+      hb.setAttribute('x', x - 12); hb.setAttribute('y', y - 10);
+      hb.setAttribute('width', 24); hb.setAttribute('height', 20);
+      hb.setAttribute('fill', 'transparent');
+      pinG.appendChild(hb);
+
+      attachPinHandlers(pinG);
+
+      // register in PIN_REGISTRY so drag-to-connect knows this pin and where it is
+      PIN_REGISTRY.push({
+        el: pinG, nodeId: n.id, pin: n.id, role,
+        anchorFn: () => ({ x, y })
+      });
+
+      grp.appendChild(pinG);
+    }
 
     // Pins for instances
     if(n.kind==='instance'){
