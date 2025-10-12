@@ -168,11 +168,10 @@
 <body>
   <div id="app">
     <header>
-      <label style="margin-left:8px;"><input type="checkbox" id="toggleUngrouped"> Ungrouped edges</label>
       <button class="btn" id="newInput">Add input port</button>
       <button class="btn" id="newOutput">Add output port</button>
       <button class="btn" id="newSignal">Add signal</button>
-      <button class="btn" id="groupBuses">Group buses</button>
+      <label style="margin-left:8px;"><input type="checkbox" id="groupBusesToggle" checked> Group bus slices</label>
       <button class="btn btn-danger" id="deleteSel">Delete</button>
       <div style="flex:1"></div>
       <button class="btn" id="importVVIZ">Import .vviz.json</button>
@@ -536,11 +535,11 @@
     });
 
     // Bus grouping toggle (simple label aggregation)
-    let busesGrouped = true;
-    let ungrouped = false;
-    document.getElementById('toggleUngrouped')
-      .addEventListener('change', (e)=>{ ungrouped = e.target.checked; render(); });
-    q('#groupBuses').addEventListener('click', () => { busesGrouped = !busesGrouped; render(); });
+    let busesGrouped = q('#groupBusesToggle').checked;
+    q('#groupBusesToggle').addEventListener('change', () => {
+      busesGrouped = q('#groupBusesToggle').checked;
+      render();
+    });
 
     // Import/export
     q('#exportVVIZ').addEventListener('click', () => {
@@ -1171,7 +1170,7 @@ use ieee.std_logic_1164.all;
 
       // optional bus grouping
       const edgesToDraw = [];
-      if (busesGrouped && !ungrouped) {
+      if (busesGrouped) {
         const groups = new Map(); // key=(sNode,tNode,base) -> list
         for (const e of edges) {
           const key = e.sNode + '|' + e.tNode + '|' + e.base;
