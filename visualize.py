@@ -38,15 +38,8 @@ def write_block_html(out_path: pathlib.Path, fi: FileInfo, entity_port_db: Dict[
     }
     out_path.write_text(tpl.replace("/*__BLOCK_DATA__*/", json.dumps(payload)), encoding="utf-8")
 
-def write_designer_html(out_path: pathlib.Path):
-    """
-    Writes a standalone SPA that:
-      - loads ./design_db.json
-      - allows drag/drop of entities into a canvas
-      - lets user add top-level ports & internal signals
-      - connects pins to build a netlist
-      - exports .vviz.json and .vhd (client-side codegen)
-      - can import an existing .vviz.json to continue editing
-    """
+def write_designer_html(out_path: pathlib.Path, db) -> None:
+    """Embed the full DB to avoid file:// fetch/CORS issues."""
     tpl = _load_template("designer_template.html")
-    out_path.write_text(tpl, encoding="utf-8")
+    embedded = json.dumps(db.to_json(), ensure_ascii=False)
+    out_path.write_text(tpl.replace("/*__DB__*/", embedded), encoding="utf-8")

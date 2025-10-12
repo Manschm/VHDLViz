@@ -95,7 +95,7 @@ def main():
 
     # Designer
     designer_path = outdir / "designer.html"
-    write_designer_html(designer_path)
+    write_designer_html(designer_path, db)
 
     print(f"[ok] Generated:\n- {index_path}\n- {db_json_path}\n- {block_dir}/<file>.html\n- {designer_path}")
     if args.open:

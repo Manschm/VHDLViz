@@ -78,6 +78,8 @@
 <div id="tip"></div>
 
 <script>
+// Embedded by visualize.write_designer_html()
+const DESIGN_DB = /*__DB__*/
 const tip = document.getElementById('tip');
 function showTip(x,y,html){ tip.style.left=(x+12)+'px'; tip.style.top=(y+12)+'px'; tip.innerHTML=html; tip.style.opacity=1; }
 function hideTip(){ tip.style.opacity=0; }
@@ -119,20 +121,24 @@ function download(filename, text){
 function portDirText(d){ return d.toLowerCase(); }
 
 // ---------- Load design_db ----------
-fetch('design_db.json').then(r=>r.json()).then(db=>{
-  // Build entity library
-  for(const f of db.files){
-    if(!f.entity_name) continue;
+const lib = { entities: {} }; // entityName -> {ports:[{name,direction,dtype}]}
+
+// Build entity library from embedded DB (no CORS issues)
+(function initLibraryFromEmbeddedDB() {
+  const db = DESIGN_DB;
+  if (!db || !db.files) return;
+  for (const f of db.files) {
+    if (!f.entity_name) continue;
     lib.entities[f.entity_name] = { name: f.entity_name, ports: f.ports || [] };
   }
   populateLibrary();
-});
+})();
 
 // ---------- Sidebar lists ----------
 function refreshMetaLists(){
   const pl = q('#portList'); pl.innerHTML='';
   model.ports.forEach(p=>{
-    pl.appendChild(el('div', {className:'pill', innerText:`${p.name}: ${p.dir} ${p.dtype}`}));
+    pl.appendChild(el('div', {className:'pill', innerText:`${p.name}: ${p.direction} ${p.dtype}`}));
   });
   const sl = q('#sigList'); sl.innerHTML='';
   model.signals.forEach(s=>{
@@ -276,7 +282,7 @@ use ieee.std_logic_1164.all;
   let ent = `entity ${name} is\n`;
   if((v.ports||[]).length){
     ent += "  port (\n";
-    ent += v.ports.map(p=>`    ${p.name} : ${p.dir} ${p.dtype}`).join(";\n") + "\n";
+    ent += v.ports.map(p=>`    ${p.name} : ${p.direction} ${p.dtype}`).join(";\n") + "\n";
     ent += "  );\n";
   }
   ent += `end ${name};\n\n`;
@@ -311,7 +317,9 @@ function computeEdges(){
   for(const i of model.instances){
     const ent = lib.entities[i.entity];
     if(!ent) continue;
-    entPortDirs[i.id] = Object.fromEntries(ent.ports.map(p=>[p.name, p.dir.toLowerCase()]));
+    entPortDirs[i.id] = Object.fromEntries(
+      ent.ports.map(p => [p.name, String(p.direction || '').toLowerCase()])
+    );
   }
 
   function baseOf(expr){
@@ -331,7 +339,7 @@ function computeEdges(){
 
   // top-level ports
   for(const p of (model.ports||[])){
-    addNet('eport', p.name, { node: "port::"+p.name, pin: p.name, label: p.name, role: p.dir==='in' ? 'driver':'sink' });
+    addNet('eport', p.name, { node: "port::"+p.name, pin: p.name, label: p.name, role: p.direction==='in' ? 'driver':'sink' });
   }
 
   // instances
@@ -429,8 +437,8 @@ function render(){
   // Port nodes
   for(const p of (model.ports||[])){
     const id = "port::"+p.name;
-    const pos = model.ui.nodes[id] || {x: p.dir==='in' ? 60 : 900, y: 80};
-    const n = {id, kind:p.dir==='in'?'entity_in':'entity_out', x:pos.x, y:pos.y, w:150, h:36, label:`${p.name} (${p.dir})`, inputs:[], outputs:[]};
+    const pos = model.ui.nodes[id] || {x: p.direction==='in' ? 60 : 900, y: 80};
+    const n = {id, kind:p.direction==='in'?'entity_in':'entity_out', x:pos.x, y:pos.y, w:150, h:36, label:`${p.name} (${p.direction})`, inputs:[], outputs:[]};
     nodes.push(n);
     ensurePinAnch(n);
   }
@@ -443,7 +451,7 @@ function render(){
     const ins = [], outs=[];
     // show only formals we used OR all? Show all for clarity:
     for(const p of ports){
-      const d = p.dir.toLowerCase();
+      const d = String(p.direction || '').toLowerCase();
       if(d==='in') ins.push(p.name);
       else if(d==='out' || d==='buffer') outs.push(p.name);
       else ins.push(p.name); // inout on left for now
@@ -679,7 +687,7 @@ svg.addEventListener('dblclick', ev=>{
   const pm = inst.port_map || {};
   for(const p of ent.ports){
     const cur = pm[p.name] || "";
-    const next = prompt(`Connect ${inst.id}.${p.name} (${p.dir}):`, cur);
+    const next = prompt(`Connect ${inst.id}.${p.name} (${p.direction}):`, cur);
     if(next===null) continue;
     if(next.trim()===""){ delete pm[p.name]; }
     else pm[p.name] = next.trim();
