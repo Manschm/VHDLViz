@@ -8,6 +8,59 @@ def _strip_comments(text: str) -> str:
     # VHDL comments are '--' to end of line
     return re.sub(r'--.*?$', '', text, flags=re.MULTILINE)
 
+def _collect_assignments(text: str):
+    """
+    Returns list of dicts:
+      {"target": "...", "expr": "...", "kind": "simple|cond|select|proc", "meta": {...}}
+    """
+    t = _strip_cmnts(text)
+    out = []
+
+    # simple concurrent
+    for m in patterns.ASSIGN_RE.finditer(t):
+        out.append({"target": m.group("lhs").strip(), "expr": m.group("expr").strip(),
+                    "kind": "simple", "meta": {}})
+
+    # conditional concurrent
+    for m in patterns.COND_ASSIGN_RE.finditer(t):
+        lhs = m.group("lhs").strip()
+        e_true = m.group("e_true").strip()
+        cond = m.group("cond").strip()
+        e_false = m.group("e_false").strip()
+        # Represent as two guarded drivers; wiring will show as expr nodes
+        out.append({"target": lhs, "expr": f"{e_true}  -- when {cond}", "kind": "cond",
+                    "meta": {"cond": cond, "branch": "true"}})
+        out.append({"target": lhs, "expr": f"{e_false} -- else", "kind": "cond",
+                    "meta": {"cond": cond, "branch": "false"}})
+
+    # with-select
+    for m in patterns.WITH_SELECT_RE.finditer(t):
+        lhs = m.group("lhs").strip()
+        sel = m.group("sel").strip()
+        body = m.group("body")
+        for w in patterns.WHEN_ITEM_RE.finditer(body):
+            expr = w.group("expr").strip()
+            choice = w.group("choice").strip()
+            out.append({"target": lhs, "expr": f"{expr}  -- when {sel}={choice}",
+                        "kind": "select", "meta": {"sel": sel, "choice": choice}})
+
+    # process blocks (combinational best-effort)
+    for pm in patterns.PROCESS_BLOCK_RE.finditer(t):
+        body = pm.group("body")
+        for m in patterns.ASSIGN_RE.finditer(body):
+            out.append({"target": m.group("lhs").strip(),
+                        "expr": m.group("expr").strip(),
+                        "kind": "proc", "meta": {}})
+
+    # de-dup identical entries to avoid double counting when regexes overlap
+    seen = set()
+    uniq = []
+    for a in out:
+        key = (a["target"], a["expr"], a["kind"], tuple(sorted(a["meta"].items())))
+        if key in seen: continue
+        seen.add(key); uniq.append(a)
+    return uniq
+
 def _split_assoc_list(s: str) -> List[str]:
     parts, buf, depth = [], [], 0
     in_str = False; quote = ''

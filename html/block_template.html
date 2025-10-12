@@ -118,6 +118,27 @@
 
   elk.layout(g).then(lg => {
     const svg = document.getElementById('elk');
+
+    // Pan/zoom
+    let view = { x:0, y:0, k:1 };
+    function applyView(){ svg.setAttribute('viewBox', `${-view.x} ${-view.y} ${(lg.width+80)/view.k} ${(lg.height+80)/view.k}`); }
+    applyView();
+    let panning=false, start=null;
+    svg.addEventListener('mousedown', ev => { if(ev.target===svg){ panning=true; start={x:ev.clientX, y:ev.clientY, vx:view.x, vy:view.y}; }});
+    window.addEventListener('mousemove', ev => { if(!panning) return; view.x = start.vx - (ev.clientX - start.x); view.y = start.vy - (ev.clientY - start.y); applyView(); });
+    window.addEventListener('mouseup', ()=> panning=false);
+    svg.addEventListener('wheel', ev => { ev.preventDefault(); const d = Math.sign(ev.deltaY)*-0.1; view.k = Math.max(0.4, Math.min(2, view.k*(1+d))); applyView(); }, {passive:false});
+
+    // Net details panel
+    const netPanel = document.createElement('div');
+    netPanel.className = 'section';
+    netPanel.innerHTML = '<div class="key">Net details</div><div id="netDetails" class="hint">Click an edge…</div>';
+    document.getElementById('sidebar').appendChild(netPanel);
+    function showNetDetails(base, items){
+      const div = document.getElementById('netDetails');
+      div.innerHTML = `<div><b>${base}</b></div>` + items.map(x=>`<div>${x}</div>`).join('');
+    }
+
     const NS = "http://www.w3.org/2000/svg";
     svg.setAttribute('viewBox', `0 0 ${lg.width+80} ${lg.height+80}`);
 
@@ -356,7 +377,13 @@
           path.addEventListener('mouseleave', hideTip);
 
           // Click highlight (works in grouped mode)
-          path.addEventListener('click', (ev) => { ev.stopPropagation(); clearHighlights(); highlightEdge(path); });
+          path.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            clearHighlights();
+            highlightEdge(path);
+            const items = group.map(g => `${g.labels?.[0]?.text || ''} (${g.src_pin} → ${g.dst_pin})`);
+            showNetDetails(base, items);
+          });
 
           svg.appendChild(path); svg.appendChild(lbl);
           registerEdgePath(path, sId, tId);
@@ -405,7 +432,12 @@
               setTip(ev.clientX, ev.clientY, `<div style="font-weight:600">${lbl.textContent}</div>${meta ? `<div class="hint">${meta}</div>`:''}`);
             });
             path.addEventListener('mouseleave', hideTip);
-            path.addEventListener('click', (ev) => { ev.stopPropagation(); clearHighlights(); highlightEdge(path); });
+            path.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              clearHighlights();
+              highlightEdge(path);
+              showNetDetails(e.base || lbl.textContent, [`${lbl.textContent} (${e.src_pin} → ${e.dst_pin})`]);
+            });
 
             svg.appendChild(path); svg.appendChild(lbl);
             registerEdgePath(path, sId, tId);

@@ -2,6 +2,31 @@ import re
 
 FLAGS = re.IGNORECASE | re.DOTALL | re.MULTILINE
 
+# Conditional concurrent assignment:   a <= e1 when cond else e2;
+COND_ASSIGN_RE = re.compile(
+    r"(?<!\S)(?P<lhs>\w+(?:\s*\([^)]*\))?)\s*<=\s*(?P<e_true>[^;]*?)\s+when\s+(?P<cond>[^;]*?)\s+else\s+(?P<e_false>[^;]*?);",
+    FLAGS
+)
+
+# Selected signal assignment:
+#   with sel select a <= e0 when c0, e1 when c1, others;
+WITH_SELECT_RE = re.compile(
+    r"(?<!\S)with\s+(?P<sel>[^;]+?)\s+select\s+(?P<lhs>\w+(?:\s*\([^)]*\))?)\s*<=\s*(?P<body>.*?);",
+    FLAGS
+)
+# Split the body: "e when c, e2 when c2, others"
+WHEN_ITEM_RE = re.compile(
+    r"(?P<expr>[^,]+?)\s+when\s+(?P<choice>[^,]+?)(?:,|$)",
+    FLAGS
+)
+
+# Very light process-style (combinational) assignments:
+#   process(...) begin ...  a <= b;  ... end process;
+PROCESS_BLOCK_RE = re.compile(
+    r"(?<!\S)process\s*(?:\([^\)]*\))?\s*begin(?P<body>.*?)end\s+process\s*;?",
+    FLAGS
+)
+
 # ENTITY with optional PORT section
 ENTITY_RE = re.compile(
     r"\bentity\s+(?P<name>\w+)\s+is\s*"
@@ -46,6 +71,7 @@ PMAP_KV_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Simple concurrent assignment:   a <= b;
 ASSIGN_RE = re.compile(
     r"(?<!\S)(?P<lhs>\w+(?:\s*\([^)]*\))?)\s*<=\s*(?P<expr>.*?);",
     FLAGS

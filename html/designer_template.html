@@ -144,18 +144,31 @@
       border-color: #d66;
       background: #fbe9e9;
     }
-    svg text { 
+    svg text {
       user-select: none; 
       -webkit-user-select: none; 
       -moz-user-select: none; 
       -ms-user-select: none; 
     }
+    .pin-hover circle {
+      transform: scale(1.5);
+      transform-box: fill-box;
+      transform-origin: center;
+      stroke: #3b82f6;
+      stroke-width: 1.2;
+    }
+    #inlineEditor {
+      position:absolute; z-index:10; padding:4px 6px; border:1px solid #bbb; border-radius:6px;
+      background:#fff; box-shadow:0 2px 8px rgba(0,0,0,.15); font: 12px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, sans-serif;
+    }
+    .warn { color:#a33; font-weight:600; }
   </style>
 </head>
 
 <body>
   <div id="app">
     <header>
+      <label style="margin-left:8px;"><input type="checkbox" id="toggleUngrouped"> Ungrouped edges</label>
       <button class="btn" id="newInput">Add input port</button>
       <button class="btn" id="newOutput">Add output port</button>
       <button class="btn" id="newSignal">Add signal</button>
@@ -200,6 +213,10 @@
       <div class="sec hint">Tip: drag an entity to the canvas. Drag from an output pin (right) to an input pin (left) to
         create a connection. Inputs drive the design, outputs are sinks. Click nodes/edges to highlight; ESC to clear.
       </div>
+      <div class="sec">
+        <div class="key">Selection</div>
+        <div id="inspector" class="hint">Select a node or edge…</div>
+      </div>
     </div>
 
     <div id="canvasWrap">
@@ -238,6 +255,78 @@
     };
 
     // ---------- Helpers ----------
+    function parseRange(dtype){
+      const m = /\((\d+)\s+(downto|to)\s+(\d+)\)/i.exec(dtype||'');
+      if(!m) return null; const a=+m[1], b=+m[3]; return Math.abs(a-b)+1;
+    }
+    function widthOfType(dtype){
+      if(!dtype) return null;
+      const t = dtype.toLowerCase().trim();
+      if (t.startsWith('std_logic_vector')) return parseRange(dtype);
+      if (t === 'std_logic') return 1;
+      return null;
+    }
+    function widthOfActual(actual){
+      const s = (actual||'').trim();
+      // literal width unknown (treat as 1 for simple '0'/'1'/'\'0\'')
+      if (/^'[^']'$/ .test(s) || s==='0' || s==='1') return 1;
+      // slice: name(hi downto lo) or (idx)
+      const m = /.+\((\d+)\s+(downto|to)\s+(\d+)\)/i.exec(s);
+      if (m) return Math.abs(+m[1]-+m[3])+1;
+      const i = /.+\(\s*\d+\s*\)$/.exec(s);
+      if (i) return 1;
+      return null;
+    }
+    function dtypeOfPin(nodeId, pin){
+      // top-level ports
+      if (nodeId.startsWith('port::')){
+        const name = nodeId.replace('port::','');
+        const p = (model.ports||[]).find(x=>x.name===name);
+        return p ? p.dtype : null;
+      }
+      // instance pins
+      if (nodeId.startsWith('inst::')){
+        const instId = nodeId.replace('inst::','');
+        const inst = model.instances.find(i=>i.id===instId);
+        const ent = inst && lib.entities[inst.entity];
+        if (!ent) return null;
+        const formal = pin.split('.').slice(-1)[0];
+        const port = ent.ports.find(p=>p.name===formal);
+        return port ? port.dtype : null;
+      }
+      return null;
+    }
+    function checkWidth(driverNode, driverPin, actual, sinkNode, sinkPin){
+      const wA = widthOfActual(actual);
+      const dType = dtypeOfPin(sinkNode, sinkPin); // compare to sink formal type
+      const wF = widthOfType(dType);
+      if (wA && wF && wA !== wF) {
+        return `Width mismatch: actual ${wA} vs formal ${wF}`;
+      }
+      return null;
+    }
+    function setInspector(html){ document.getElementById('inspector').innerHTML = html; }
+
+    let inlineEd = null;
+    function openInlineEditor(worldPt, initial, onDone){
+      closeInlineEditor();
+      const r = svg.getBoundingClientRect();
+      const cx = r.left + view.x + worldPt.x*view.k, cy = r.top + view.y + worldPt.y*view.k;
+      const div = document.createElement('div'); div.id='inlineEditor';
+      const inp = document.createElement('input'); inp.type='text'; inp.value = initial || ''; inp.style.minWidth='220px';
+      const ok = document.createElement('button'); ok.textContent='OK'; ok.className='btn'; ok.style.marginLeft='6px';
+      const cancel = document.createElement('button'); cancel.textContent='Cancel'; cancel.className='btn'; cancel.style.marginLeft='4px';
+      div.style.left = (cx+12)+'px'; div.style.top = (cy+12)+'px';
+      div.appendChild(inp); div.appendChild(ok); div.appendChild(cancel);
+      document.body.appendChild(div); inlineEd = div; inp.focus(); inp.select();
+      function done(commit){
+        const val = commit ? inp.value.trim() : null;
+        closeInlineEditor(); onDone(val);
+      }
+      ok.onclick = ()=>done(true); cancel.onclick = ()=>done(false);
+      inp.onkeydown = (e)=>{ if(e.key==='Enter') done(true); if(e.key==='Escape') done(false); };
+    }
+    function closeInlineEditor(){ if(inlineEd){ inlineEd.remove(); inlineEd=null; } }
     function uid(prefix) { return prefix + Math.random().toString(36).slice(2, 8); }
     function q(sel) { return document.querySelector(sel); }
     function el(tag, props = {}, children = []) { const n = document.createElement(tag); Object.assign(n, props); children.forEach(c => n.appendChild(c)); return n; }
@@ -448,6 +537,9 @@
 
     // Bus grouping toggle (simple label aggregation)
     let busesGrouped = true;
+    let ungrouped = false;
+    document.getElementById('toggleUngrouped')
+      .addEventListener('change', (e)=>{ ungrouped = e.target.checked; render(); });
     q('#groupBuses').addEventListener('click', () => { busesGrouped = !busesGrouped; render(); });
 
     // Import/export
@@ -618,6 +710,19 @@ use ieee.std_logic_1164.all;
     let connectMode = null;       // { from:{nodeId,pin,role}, ghostPath, hoverPin }
     const PIN_REGISTRY = [];      // [{el,nodeId,pin,role,anchorFn}]
 
+    const SNAP_RADIUS = 18; // world units
+    function findNearestEligible(pt, fromRole){
+      let best=null, bestD=1e9;
+      for(const p of PIN_REGISTRY){
+        const ok = (fromRole==='driver' && p.role==='sink') || (fromRole==='sink' && p.role==='driver');
+        if (!ok) continue;
+        const a = p.anchorFn(); const dx=a.x-pt.x, dy=a.y-pt.y;
+        const d = Math.hypot(dx,dy);
+        if (d < bestD && d <= SNAP_RADIUS) { best=p; bestD=d; }
+      }
+      return best;
+    }
+
     function startConnect(from) {
       if (connectMode) endConnect(false);
       connectMode = { from, ghostPath: null, hoverPin: null };
@@ -642,10 +747,22 @@ use ieee.std_logic_1164.all;
     function updateGhost(mouseClientX, mouseClientY) {
       if (!connectMode) return;
       const { from } = connectMode;
-      const s = from.anchorFn(true);  // as source?
+      const s = from.anchorFn(true);
       const pt = clientToWorld(mouseClientX, mouseClientY);
-      const d = `M ${s.x} ${s.y} C ${s.x + 60} ${s.y}, ${pt.x - 60} ${pt.y}, ${pt.x} ${pt.y}`;
-      connectMode.ghostPath.setAttribute('d', d);
+      const candidate = findNearestEligible(pt, from.role);
+      // clear prev hover
+      if (connectMode.hoverPin && connectMode.hoverPin.el) connectMode.hoverPin.el.classList.remove('pin-hover');
+      if (candidate){
+        connectMode.hoverPin = candidate;
+        candidate.el.classList.add('pin-hover');
+        const to = candidate.anchorFn(false);
+        const d = `M ${s.x} ${s.y} C ${s.x+60} ${s.y}, ${to.x-60} ${to.y}, ${to.x} ${to.y}`;
+        connectMode.ghostPath.setAttribute('d', d);
+      } else {
+        connectMode.hoverPin = null;
+        const d = `M ${s.x} ${s.y} C ${s.x+60} ${s.y}, ${pt.x-60} ${pt.y}, ${pt.x} ${pt.y}`;
+        connectMode.ghostPath.setAttribute('d', d);
+      }
     }
 
     function endConnect(commit) {
@@ -663,6 +780,34 @@ use ieee.std_logic_1164.all;
 
     // Apply the connection to the model (updates port_map / assignments / signals)
     function makeConnection(a, b) {
+      // If both roles equal, prompt a signal and wire both formals to it.
+      if ((a.role === 'sink' && b.role === 'sink') || (a.role === 'driver' && b.role === 'driver')) {
+        const defName = suggestSignalName(a.pin, b.pin);
+        const anchor = a.anchorFn ? a.anchorFn() : {x:0,y:0};
+        openInlineEditor(anchor, defName, (sig) => {
+          if (!sig) return;
+          ensureSignalExistsBase(sig);
+          const pairs = [a, b];
+          for (const p of pairs){
+            if (p.nodeId.startsWith('inst::')){
+              const instId = p.nodeId.replace('inst::','');
+              const formal = p.pin.split('.').slice(-1)[0];
+              const inst = model.instances.find(i=>i.id===instId);
+              inst.port_map ||= {}; inst.port_map[formal] = sig;
+            } else if (p.nodeId.startsWith('port::')) {
+              // top-level port gets assignment to the signal if it's an OUT, or drives it if it's an IN
+              const name = p.nodeId.replace('port::','');
+              if ((model.ports.find(x=>x.name===name)?.dir||'').toLowerCase()==='out'){
+                model.assignments ||= []; model.assignments.push({target: name, expr: sig});
+              } else {
+                model.assignments ||= []; model.assignments.push({target: sig, expr: name});
+              }
+            }
+          }
+          render();
+        });
+        return;
+      }
       // roles: driver -> sink
       let driver = a, sink = b;
       if (a.role === 'sink' && b.role === 'driver') { driver = b; sink = a; }
@@ -678,6 +823,8 @@ use ieee.std_logic_1164.all;
         const inst = model.instances.find(i => i.id === instId);
         if (!inst.port_map) inst.port_map = {};
         inst.port_map[formal] = topName(driver.nodeId);
+        const warn = checkWidth(driver.nodeId, driver.pin, (driver.pin.includes('.') ? (model.instances.find(i=>i.id===driver.nodeId.replace('inst::',''))?.port_map||{})[driver.pin.split('.').slice(-1)[0]] : (driver.nodeId.startsWith('port::') ? driver.nodeId.replace('port::','') : '')), sink.nodeId, sink.pin);
+        if (warn) setInspector(`<div class="warn">${warn}</div>`);
         return;
       }
 
@@ -688,6 +835,8 @@ use ieee.std_logic_1164.all;
         const inst = model.instances.find(i => i.id === instId);
         if (!inst.port_map) inst.port_map = {};
         inst.port_map[formal] = topName(sink.nodeId);
+        const warn = checkWidth(driver.nodeId, driver.pin, (driver.pin.includes('.') ? (model.instances.find(i=>i.id===driver.nodeId.replace('inst::',''))?.port_map||{})[driver.pin.split('.').slice(-1)[0]] : (driver.nodeId.startsWith('port::') ? driver.nodeId.replace('port::','') : '')), sink.nodeId, sink.pin);
+        if (warn) setInspector(`<div class="warn">${warn}</div>`);
         return;
       }
 
@@ -706,6 +855,9 @@ use ieee.std_logic_1164.all;
         const sFormal = sink.pin.split('.').slice(-1)[0];
         sInst.port_map ||= {};
         sInst.port_map[sFormal] = sig;
+
+        const warn = checkWidth(driver.nodeId, driver.pin, (driver.pin.includes('.') ? (model.instances.find(i=>i.id===driver.nodeId.replace('inst::',''))?.port_map||{})[driver.pin.split('.').slice(-1)[0]] : (driver.nodeId.startsWith('port::') ? driver.nodeId.replace('port::','') : '')), sink.nodeId, sink.pin);
+        if (warn) setInspector(`<div class="warn">${warn}</div>`);
         return;
       }
 
@@ -833,6 +985,7 @@ use ieee.std_logic_1164.all;
         ensurePinAnch(n);
       }
 
+      const groupEdges = document.createElementNS(svg.namespaceURI, 'g'); g.appendChild(groupEdges);
       // Draw nodes
       const groupNodes = document.createElementNS(svg.namespaceURI, 'g'); g.appendChild(groupNodes);
 
@@ -920,15 +1073,16 @@ use ieee.std_logic_1164.all;
               attachPinHandlers(pinG);
               // click/dblclick to edit text actual for this formal
               pinG.addEventListener('dblclick', () => {
-                const instId = n.id.replace('inst::', '');
+                const instId = n.id.replace('inst::','');
                 const inst = model.instances.find(i => i.id === instId);
-                const cur = (inst.port_map || {})[pinName] || '';
-                const next = prompt(`Connect ${instId}.${pinName} (actual):`, cur);
-                if (next === null) return;
-                inst.port_map ||= {};
-                if (next.trim() === '') delete inst.port_map[pinName];
-                else inst.port_map[pinName] = next.trim();
-                render();
+                const cur = (inst.port_map||{})[pinName] || '';
+                const anchor = { x: (pinG.dataset.role==='sink'? n.x : n.x+n.w), y };
+                openInlineEditor(anchor, cur, (val) => {
+                  if (val === null) return;
+                  inst.port_map ||= {};
+                  if (val === '') delete inst.port_map[pinName]; else inst.port_map[pinName] = val;
+                  render();
+                });
               });
 
               grp.appendChild(pinG);
@@ -967,15 +1121,16 @@ use ieee.std_logic_1164.all;
               // wiring gestures
               attachPinHandlers(pinG);
               pinG.addEventListener('dblclick', () => {
-                const instId = n.id.replace('inst::', '');
+                const instId = n.id.replace('inst::','');
                 const inst = model.instances.find(i => i.id === instId);
-                const cur = (inst.port_map || {})[pinName] || '';
-                const next = prompt(`Connect ${instId}.${pinName} (actual):`, cur);
-                if (next === null) return;
-                inst.port_map ||= {};
-                if (next.trim() === '') delete inst.port_map[pinName];
-                else inst.port_map[pinName] = next.trim();
-                render();
+                const cur = (inst.port_map||{})[pinName] || '';
+                const anchor = { x: (pinG.dataset.role==='sink'? n.x : n.x+n.w), y };
+                openInlineEditor(anchor, cur, (val) => {
+                  if (val === null) return;
+                  inst.port_map ||= {};
+                  if (val === '') delete inst.port_map[pinName]; else inst.port_map[pinName] = val;
+                  render();
+                });
               });
 
               grp.appendChild(pinG);
@@ -1016,7 +1171,7 @@ use ieee.std_logic_1164.all;
 
       // optional bus grouping
       const edgesToDraw = [];
-      if (busesGrouped) {
+      if (busesGrouped && !ungrouped) {
         const groups = new Map(); // key=(sNode,tNode,base) -> list
         for (const e of edges) {
           const key = e.sNode + '|' + e.tNode + '|' + e.base;
@@ -1043,8 +1198,6 @@ use ieee.std_logic_1164.all;
           });
         });
       }
-
-      const groupEdges = document.createElementNS(svg.namespaceURI, 'g'); g.appendChild(groupEdges);
 
       function anchor(nodeId, side, pin) {
         const n = nodes.find(nn => nn.id === nodeId);
@@ -1102,6 +1255,11 @@ use ieee.std_logic_1164.all;
             clearSelection();
             selectedEdges.add(path)
             path.classList.add('hi-edge');
+            setInspector(
+              `<div><b>Edge</b></div>
+              <div>${E.label}</div>
+              <div class="hint">${E.meta}</div>`
+            );
             // highlight endpoints
             const sGrp = svg.querySelector(`[data-node="${E.sNode}"]`);
             const tGrp = svg.querySelector(`[data-node="${E.tNode}"]`);
@@ -1142,6 +1300,8 @@ use ieee.std_logic_1164.all;
           clearSelection();
           const id = grp.getAttribute('data-node');
           grp.classList.add('hi-node'); selectedNodes.add(id);
+          const nodeObj = [...nodes].find(n => n.id === id);
+          setInspector(`<div><b>Node</b></div><div>${nodeObj ? nodeObj.label : id}</div>`);
           // connected edges
           const conn = [...svg.querySelectorAll('path[data-edge]')].filter(p => p.dataset.sNode === id || p.dataset.tNode === id);
           conn.forEach(p => p.classList.add('hi-edge'));

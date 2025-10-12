@@ -88,9 +88,21 @@ def build_wiring(fi: FileInfo,
 
     # Concurrent assignments: target may be sliced; driver is expr
     for a in getattr(fi, "assignments", []):
-        tbase, _ = _split_base_slice(a.target)
+        tbase, _ = _split_base_slice(a["target"] if isinstance(a, dict) else a.target)
+        label = a["target"] if isinstance(a, dict) else a.target
+        expr  = a["expr"]   if isinstance(a, dict) else a.expr
         if tbase:
-            add_ep('signal', tbase, ('expr', a.expr), a.target)
+            # include kind/meta in label for sidebar/tooltip clarity
+            tagged = expr
+            if isinstance(a, dict):
+                k = a.get("kind","")
+                if k == "cond":
+                    tagged += "  -- conditional"
+                elif k == "select":
+                    tagged += "  -- with-select"
+                elif k == "proc":
+                    tagged += "  -- process"
+            add_ep('signal', tbase, ('expr', tagged), label)
 
     # Nodes
     nodes: List[Dict] = []
