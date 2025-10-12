@@ -653,10 +653,10 @@ function render(){
 
   // grid
   const grid = document.createElementNS(svg.namespaceURI, 'path');
-  let d=""; const step=40, W=4000, H=2000;
+  let d=""; const step=GRID, W=4096, H=2048;
   for(let x=0;x<=W;x+=step){ d+=`M ${x} 0 V ${H} `; }
   for(let y=0;y<=H;y+=step){ d+=`M 0 ${y} H ${W} `; }
-  grid.setAttribute('d', d); grid.setAttribute('stroke','#f0f0f0'); grid.setAttribute('stroke-width','1');
+  grid.setAttribute('d', d); grid.setAttribute('stroke','#f0f0f0'); grid.setAttribute('stroke-width','1'); grid.setAttribute('shape-rendering','crispEdges');
   g.appendChild(grid);
 
   // Nodes: top ports and instances
@@ -677,7 +677,7 @@ function render(){
   for(const p of (model.ports||[])){
     const id = "port::"+p.name;
     const pos = model.ui.nodes[id] || {x: p.dir==='in' ? 60 : 900, y: 80};
-    const n = {id, kind:p.dir==='in'?'entity_in':'entity_out', x:pos.x, y:pos.y, w:150, h:36, label:`${p.name} (${p.dir})`, inputs:[], outputs:[]};
+    const n = {id, kind: (p.dir === 'in' ? 'entity_in' : 'entity_out'), x: pos.x, y: pos.y, w: 160, h: 32, label: `${p.name}: ${p.dir} ${p.dtype}`, inputs: [], outputs: []};
     nodes.push(n);
     ensurePinAnch(n);
   }
@@ -696,8 +696,8 @@ function render(){
       else ins.push(p.name); // inout on left for now
     }
     const rows = Math.max(ins.length, outs.length);
-    const h = Math.max(80, 24 + 16*rows);
-    const n = {id: "inst::"+inst.id, kind:'instance', x:pos.x, y:pos.y, w:240, h, label:`${inst.id} : ${inst.entity}`, inputs:ins, outputs:outs};
+    const h = Math.max(80, 32 + 16*rows);
+    const n = {id: "inst::"+inst.id, kind: 'instance', x: pos.x, y: pos.y, w: 240, h, label: `${inst.id} : ${inst.entity}`, inputs: ins, outputs: outs};
     nodes.push(n);
     ensurePinAnch(n);
   }
@@ -740,7 +740,12 @@ function render(){
       hb.setAttribute('width', 24); hb.setAttribute('height', 20);
       hb.setAttribute('fill', 'transparent');
       pinG.appendChild(hb);
-
+      const dot = document.createElementNS(svg.namespaceURI, 'circle');
+      dot.setAttribute('cx', x);
+      dot.setAttribute('cy', y);
+      dot.setAttribute('r', 3);
+      dot.setAttribute('fill', role === 'driver' ? '#70c790' : '#e6a265'); // green for IN (driver), orange for OUT (sink)
+      pinG.appendChild(dot);
       attachPinHandlers(pinG);
 
       // register in PIN_REGISTRY so drag-to-connect knows this pin and where it is
