@@ -123,11 +123,47 @@
     let view = { x:0, y:0, k:1 };
     function applyView(){ svg.setAttribute('viewBox', `${-view.x} ${-view.y} ${(lg.width+80)/view.k} ${(lg.height+80)/view.k}`); }
     applyView();
+    function zoomAtClient(clientX, clientY, factor){
+      const rect = svg.getBoundingClientRect();
+
+      // Current view in user units
+      const widthUser  = (lg.width + 80) / view.k;
+      const heightUser = (lg.height + 80) / view.k;
+
+      // Pixel -> user scaling
+      const pxToUserX = widthUser  / rect.width;
+      const pxToUserY = heightUser / rect.height;
+
+      // Cursor in user coords (relative to current viewBox)
+      const offsetX = clientX - rect.left;
+      const offsetY = clientY - rect.top;
+      const ux = (-view.x) + offsetX * pxToUserX;
+      const uy = (-view.y) + offsetY * pxToUserY;
+
+      // New zoom
+      const kNew = Math.max(0.4, Math.min(2.0, view.k * factor));
+      const widthUserNew  = (lg.width + 80) / kNew;
+      const heightUserNew = (lg.height + 80) / kNew;
+
+      // Keep (ux,uy) under the same screen pixel
+      const minx = ux - offsetX * (widthUserNew  / rect.width);
+      const miny = uy - offsetY * (heightUserNew / rect.height);
+
+      view.k = kNew;
+      view.x = -minx;
+      view.y = -miny;
+      applyView();
+    }
+
     let panning=false, start=null;
     svg.addEventListener('mousedown', ev => { if(ev.target===svg){ panning=true; start={x:ev.clientX, y:ev.clientY, vx:view.x, vy:view.y}; }});
     window.addEventListener('mousemove', ev => { if(!panning) return; view.x = start.vx - (ev.clientX - start.x); view.y = start.vy - (ev.clientY - start.y); applyView(); });
     window.addEventListener('mouseup', ()=> panning=false);
-    svg.addEventListener('wheel', ev => { ev.preventDefault(); const d = Math.sign(ev.deltaY)*-0.1; view.k = Math.max(0.4, Math.min(2, view.k*(1+d))); applyView(); }, {passive:false});
+    svg.addEventListener('wheel', ev => {
+      ev.preventDefault();
+      const factor = 1 + (Math.sign(ev.deltaY) * -0.1);
+      zoomAtClient(ev.clientX, ev.clientY, factor);
+    }, {passive:false});
 
     // Net details panel
     const netPanel = document.createElement('div');

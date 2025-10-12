@@ -393,6 +393,22 @@
 
     // ---------- Canvas / SVG ----------
     const svg = q('#svg');
+    function zoomAtClient(clientX, clientY, factor){
+      const rect = svg.getBoundingClientRect();
+      // cursor position in SVG pixels
+      const px = clientX - rect.left;
+      const py = clientY - rect.top;
+      // cursor position in world coords before zoom
+      const wx = (px - view.x) / view.k;
+      const wy = (py - view.y) / view.k;
+      // new scale
+      const kNew = Math.max(0.3, Math.min(2.0, view.k * factor));
+      // adjust translate so the same world point stays under the cursor
+      view.x = px - wx * kNew;
+      view.y = py - wy * kNew;
+      view.k = kNew;
+    }
+
     let view = { x: 0, y: 0, k: 1 };
 
     // Panning & zooming
@@ -402,12 +418,12 @@
       if (isPanning) { view.x = panStart.vx + (ev.clientX - panStart.x); view.y = panStart.vy + (ev.clientY - panStart.y); scheduleRender(); }
     });
     window.addEventListener('mouseup', () => { isPanning = false; });
-    svg.addEventListener('wheel', ev => {
+    svg.addEventListener('wheel', ev=>{
       ev.preventDefault();
-      const delta = Math.sign(ev.deltaY) * -0.1;
-      view.k = Math.max(0.3, Math.min(2.0, view.k * (1 + delta)));
-      scheduleRender();
-    }, { passive: false });
+      const factor = 1 + (Math.sign(ev.deltaY) * -0.1); // zoom in on wheel up, out on wheel down
+      zoomAtClient(ev.clientX, ev.clientY, factor);
+      render();
+    },{passive:false});
 
     // Drop entities
     svg.addEventListener('dragover', ev => { ev.preventDefault(); });
