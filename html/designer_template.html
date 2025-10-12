@@ -199,7 +199,8 @@ svg.addEventListener('drop', ev=>{
     const id = suggestInstanceId(data.name);
     model.instances.push({ id, entity: data.name, arch:null, port_map:{} });
     const pt = clientToWorld(ev.clientX, ev.clientY);
-    model.ui.nodes[id] = { x: pt.x, y: pt.y };
+    const sp = snapPoint(pt);
+    model.ui.nodes[id] = { x: sp.x, y: sp.y };
     render();
   }
 });
@@ -293,7 +294,8 @@ q('#newInput').addEventListener('click', async ()=>{
   const dtype = prompt("Type (e.g., std_logic or std_logic_vector(7 downto 0))","std_logic") || "std_logic";
   if(model.ports.some(p=>p.name===name)){ alert("Port already exists."); return; }
   model.ports.push({name, dir:"in", dtype});
-  model.ui.nodes["port::"+name] = { x: 50, y: 80 + model.ports.length*40 };
+  const sp = snapPoint({ x: 50, y: 80 + model.ports.length*40 });
+  model.ui.nodes["port::"+name] = sp;
   refreshMetaLists(); render();
 });
 q('#newOutput').addEventListener('click', async ()=>{
@@ -301,7 +303,8 @@ q('#newOutput').addEventListener('click', async ()=>{
   const dtype = prompt("Type:","std_logic_vector(7 downto 0)") || "std_logic";
   if(model.ports.some(p=>p.name===name)){ alert("Port already exists."); return; }
   model.ports.push({name, dir:"out", dtype});
-  model.ui.nodes["port::"+name] = { x: 900, y: 80 + model.ports.length*40 };
+  const sp = snapPoint({ x: 900, y: 80 + model.ports.length*40 });
+  model.ui.nodes["port::"+name] = sp;
   refreshMetaLists(); render();
 });
 q('#newSignal').addEventListener('click', ()=>{
@@ -480,6 +483,125 @@ function computeEdges(){
   return edges;
 }
 
+// Managing wiring by dragging from pins
+let connectMode = null;       // { from:{nodeId,pin,role}, ghostPath, hoverPin }
+const PIN_REGISTRY = [];      // [{el,nodeId,pin,role,anchorFn}]
+
+function startConnect(from) {
+  if (connectMode) endConnect(false);
+  connectMode = { from, ghostPath: null, hoverPin: null };
+
+  // highlight compatible pins
+  PIN_REGISTRY.forEach(p => {
+    const ok = (from.role === 'driver' && p.role === 'sink') ||
+               (from.role === 'sink'   && p.role === 'driver');
+    if (ok && !(p.nodeId === from.nodeId && p.pin === from.pin)) {
+      p.el.classList.add('pin-eligible');
+    }
+  });
+
+  // draw ghost path
+  connectMode.ghostPath = document.createElementNS(svg.namespaceURI, 'path');
+  connectMode.ghostPath.setAttribute('stroke', '#3b82f6');
+  connectMode.ghostPath.setAttribute('stroke-dasharray', '4 4');
+  connectMode.ghostPath.setAttribute('fill', 'none');
+  (svg.firstElementChild || svg).appendChild(connectMode.ghostPath);
+}
+
+function updateGhost(mouseClientX, mouseClientY) {
+  if (!connectMode) return;
+  const { from } = connectMode;
+  const s = from.anchorFn(true);  // as source?
+  const pt = clientToWorld(mouseClientX, mouseClientY);
+  const d = `M ${s.x} ${s.y} C ${s.x+60} ${s.y}, ${pt.x-60} ${pt.y}, ${pt.x} ${pt.y}`;
+  connectMode.ghostPath.setAttribute('d', d);
+}
+
+function endConnect(commit) {
+  if (!connectMode) return;
+  // clear highlights
+  PIN_REGISTRY.forEach(p => p.el.classList.remove('pin-eligible'));
+  if (connectMode.ghostPath) connectMode.ghostPath.remove();
+
+  if (commit && connectMode.hoverPin) {
+    makeConnection(connectMode.from, connectMode.hoverPin);
+  }
+  connectMode = null;
+  render(); // show the new wire if created
+}
+
+// Apply the connection to the model (updates port_map / assignments / signals)
+function makeConnection(a, b) {
+  // roles: driver -> sink
+  let driver = a, sink = b;
+  if (a.role === 'sink' && b.role === 'driver') { driver = b; sink = a; }
+
+  const isTopIn  = (id) => id.startsWith('port::') && (model.ports.find(p=>('port::'+p.name)===id)?.dir?.toLowerCase() === 'in');
+  const isTopOut = (id) => id.startsWith('port::') && (model.ports.find(p=>('port::'+p.name)===id)?.dir?.toLowerCase() === 'out');
+  const topName  = (id) => id.replace('port::','');
+
+  // Case 1: top input -> instance input
+  if (isTopIn(driver.nodeId) && sink.nodeId.startsWith('inst::')) {
+    const instId = sink.nodeId.replace('inst::','');
+    const formal = sink.pin.split('.').slice(-1)[0];
+    const inst = model.instances.find(i => i.id === instId);
+    if (!inst.port_map) inst.port_map = {};
+    inst.port_map[formal] = topName(driver.nodeId);
+    return;
+  }
+
+  // Case 2: instance output -> top output
+  if (driver.nodeId.startsWith('inst::') && isTopOut(sink.nodeId)) {
+    const instId = driver.nodeId.replace('inst::','');
+    const formal = driver.pin.split('.').slice(-1)[0];
+    const inst = model.instances.find(i => i.id === instId);
+    if (!inst.port_map) inst.port_map = {};
+    inst.port_map[formal] = topName(sink.nodeId);
+    return;
+  }
+
+  // Case 3: instance output -> instance input (auto-create or ask for signal)
+  if (driver.nodeId.startsWith('inst::') && sink.nodeId.startsWith('inst::')) {
+    const defName = suggestSignalName(driver.pin, sink.pin);
+    const sig = prompt("Signal name (you can use slices like data(0)):", defName) || defName;
+    ensureSignalExistsBase(sig);
+    // map both sides to the same actual
+    const dInst = model.instances.find(i => i.id === driver.nodeId.replace('inst::',''));
+    const dFormal = driver.pin.split('.').slice(-1)[0];
+    dInst.port_map ||= {};
+    dInst.port_map[dFormal] = sig;
+
+    const sInst = model.instances.find(i => i.id === sink.nodeId.replace('inst::',''));
+    const sFormal = sink.pin.split('.').slice(-1)[0];
+    sInst.port_map ||= {};
+    sInst.port_map[sFormal] = sig;
+    return;
+  }
+
+  // Case 4: top input -> top output (create assignment)
+  if (isTopIn(driver.nodeId) && isTopOut(sink.nodeId)) {
+    model.assignments ||= [];
+    model.assignments.push({ target: topName(sink.nodeId), expr: topName(driver.nodeId) });
+    return;
+  }
+
+  alert("This connection type isn't supported yet.");
+}
+
+function suggestSignalName(aPin, bPin){
+  const a = aPin.split('.').slice(-1)[0];
+  const b = bPin.split('.').slice(-1)[0];
+  const base = (/[io]$/.test(b) ? b.replace(/[io]$/,'') : b);
+  return 's_' + base;
+}
+function ensureSignalExistsBase(sig){
+  const base = (sig.match(/^([A-Za-z_]\w*)\s*\(/)?.[1]) || sig;
+  if (!model.signals.some(s => s.name === base)) {
+    model.signals.push({ name: base, dtype: "std_logic" });
+    refreshMetaLists();
+  }
+}
+
 // Draw everything
 function render(){
   svg.innerHTML='';
@@ -560,22 +682,101 @@ function render(){
 
     // Pins for instances
     if(n.kind==='instance'){
-      const top = n.y+30, rowH=16;
+      const top = n.y+32, rowH=16;
       for(let i=0;i<Math.max(n.inputs.length,n.outputs.length);i++){
-        const y = top + i*rowH;
-        if(i<n.inputs.length){
+        if (i<n.inputs.length){
+          const pinName = n.inputs[i];
+          const y = top + i*rowH;
+
+          const pinG = document.createElementNS(svg.namespaceURI, 'g');
+          pinG.classList.add('pin-hit');
+          pinG.dataset.nodeId = n.id;
+          pinG.dataset.pin = `${n.id.replace('inst::','')}.${pinName}`;
+          pinG.dataset.role = 'sink'; // instance inputs are sinks
+          // hitbox (wider than dot)
+          const hb = document.createElementNS(svg.namespaceURI, 'rect');
+          hb.setAttribute('x', n.x - 8); hb.setAttribute('y', y - 8);
+          hb.setAttribute('width', 120); hb.setAttribute('height', 16);
+          hb.setAttribute('fill', 'transparent');
+          pinG.appendChild(hb);
+
           const dot = document.createElementNS(svg.namespaceURI, 'circle');
-          dot.setAttribute('cx', n.x); dot.setAttribute('cy', y); dot.setAttribute('r', 3); dot.setAttribute('fill','#70c790'); grp.appendChild(dot);
+          dot.setAttribute('cx', n.x); dot.setAttribute('cy', y); dot.setAttribute('r', 3);
+          dot.setAttribute('fill', '#70c790'); pinG.appendChild(dot);
+
           const t = document.createElementNS(svg.namespaceURI, 'text');
-          t.setAttribute('x', n.x+6); t.setAttribute('y', y+4); t.setAttribute('font-size','11'); t.textContent = n.inputs[i]; grp.appendChild(t);
-          pinAnch[n.id].in[n.inputs[i]] = y;
+          t.setAttribute('x', n.x+6); t.setAttribute('y', y+4);
+          t.setAttribute('font-size', '11'); t.textContent = pinName; pinG.appendChild(t);
+
+          // wiring gestures
+          attachPinHandlers(pinG);
+          // click/dblclick to edit text actual for this formal
+          pinG.addEventListener('dblclick', () => {
+            const instId = n.id.replace('inst::','');
+            const inst = model.instances.find(i => i.id === instId);
+            const cur = (inst.port_map||{})[pinName] || '';
+            const next = prompt(`Connect ${instId}.${pinName} (actual):`, cur);
+            if (next === null) return;
+            inst.port_map ||= {};
+            if (next.trim()==='') delete inst.port_map[pinName];
+            else inst.port_map[pinName] = next.trim();
+            render();
+          });
+
+          groupNodes.appendChild(pinG);
+          pinAnch[n.id].in[pinName] = y;
+
+          // register for connect-mode highlighting
+          PIN_REGISTRY.push({
+            el: pinG, nodeId: n.id, pin: pinG.dataset.pin, role: 'sink',
+            anchorFn: () => ({ x: n.x, y })
+          });
         }
-        if(i<n.outputs.length){
+        if (i<n.outputs.length){
+          const pinName = n.outputs[i];
+          const y = top + i*rowH;
+
+          const pinG = document.createElementNS(svg.namespaceURI, 'g');
+          pinG.classList.add('pin-hit');
+          pinG.dataset.nodeId = n.id;
+          pinG.dataset.pin = `${n.id.replace('inst::','')}.${pinName}`;
+          pinG.dataset.role = 'driver'; // instance outputs are drivers
+          const hb = document.createElementNS(svg.namespaceURI, 'rect');
+          hb.setAttribute('x', n.x + n.w - 112); hb.setAttribute('y', y - 8);
+          hb.setAttribute('width', 120); hb.setAttribute('height', 16);
+          hb.setAttribute('fill', 'transparent');
+          pinG.appendChild(hb);
+
           const dot = document.createElementNS(svg.namespaceURI, 'circle');
-          dot.setAttribute('cx', n.x+n.w); dot.setAttribute('cy', y); dot.setAttribute('r', 3); dot.setAttribute('fill','#e6a265'); grp.appendChild(dot);
+          dot.setAttribute('cx', n.x+n.w); dot.setAttribute('cy', y); dot.setAttribute('r', 3);
+          dot.setAttribute('fill', '#e6a265'); pinG.appendChild(dot);
+
           const t = document.createElementNS(svg.namespaceURI, 'text');
-          t.setAttribute('x', n.x+n.w-6); t.setAttribute('y', y+4); t.setAttribute('font-size','11'); t.setAttribute('text-anchor','end'); t.textContent = n.outputs[i]; grp.appendChild(t);
-          pinAnch[n.id].out[n.outputs[i]] = y;
+          t.setAttribute('x', n.x+n.w-6); t.setAttribute('y', y+4);
+          t.setAttribute('font-size', '11'); t.setAttribute('text-anchor', 'end');
+          t.textContent = pinName; pinG.appendChild(t);
+
+          // wiring gestures
+          attachPinHandlers(pinG);
+          pinG.addEventListener('dblclick', () => {
+            const instId = n.id.replace('inst::','');
+            const inst = model.instances.find(i => i.id === instId);
+            const cur = (inst.port_map||{})[pinName] || '';
+            const next = prompt(`Connect ${instId}.${pinName} (actual):`, cur);
+            if (next === null) return;
+            inst.port_map ||= {};
+            if (next.trim()==='') delete inst.port_map[pinName];
+            else inst.port_map[pinName] = next.trim();
+            render();
+          });
+
+          groupNodes.appendChild(pinG);
+          pinAnch[n.id].out[pinName] = y;
+
+          PIN_REGISTRY.push({
+            el: pinG, nodeId: n.id, pin: pinG.dataset.pin, role: 'driver',
+            anchorFn: () => ({ x: n.x+n.w, y })
+          });
         }
       }
     }
@@ -589,8 +790,8 @@ function render(){
     });
     window.addEventListener('mousemove', ev=>{
       if(!dragging) return;
-      n.x = startPos.x + (ev.clientX - start.x)/view.k;
-      n.y = startPos.y + (ev.clientY - start.y)/view.k;
+      n.x = GRID_SNAP(startPos.x + (ev.clientX - start.x)/view.k);
+      n.y = GRID_SNAP(startPos.y + (ev.clientY - start.y)/view.k);
       const nodeId = n.id.startsWith('inst::') ? n.id.replace('inst::','') : n.id;
       model.ui.nodes[nodeId] = {x:n.x, y:n.y};
       render(); // simple re-render
