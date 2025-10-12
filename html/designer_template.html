@@ -84,7 +84,7 @@
 
 <script>
 // Embedded by visualize.write_designer_html()
-const DESIGN_DB = /*__DB__*/
+const DESIGN_DB = /*__DB__*/;
 const tip = document.getElementById('tip');
 function showTip(x,y,html){ tip.style.left=(x+12)+'px'; tip.style.top=(y+12)+'px'; tip.innerHTML=html; tip.style.opacity=1; }
 function hideTip(){ tip.style.opacity=0; }
@@ -111,7 +111,7 @@ const model = {
   ui: { nodes: {} }
 };
 
-const lib = { entities: {} }; // entityName -> {ports:[{name,dir,dtype}]}
+
 
 // ---------- Helpers ----------
 function uid(prefix){ return prefix + Math.random().toString(36).slice(2,8); }
@@ -150,7 +150,7 @@ const lib = { entities: {} }; // entityName -> {ports:[{name,direction,dtype}]}
 function refreshMetaLists(){
   const pl = q('#portList'); pl.innerHTML='';
   model.ports.forEach(p=>{
-    pl.appendChild(el('div', {className:'pill', innerText:`${p.name}: ${p.direction} ${p.dtype}`}));
+    pl.appendChild(el('div', {className:'pill', innerText:`${p.name}: ${p.dir} ${p.dtype}`}));
   });
   const sl = q('#sigList'); sl.innerHTML='';
   model.signals.forEach(s=>{
@@ -360,7 +360,7 @@ use ieee.std_logic_1164.all;
   let ent = `entity ${name} is\n`;
   if((v.ports||[]).length){
     ent += "  port (\n";
-    ent += v.ports.map(p=>`    ${p.name} : ${p.direction} ${p.dtype}`).join(";\n") + "\n";
+    ent += v.ports.map(p=>`    ${p.name} : ${p.dir} ${p.dtype}`).join(";\n") + "\n";
     ent += "  );\n";
   }
   ent += `end ${name};\n\n`;
@@ -417,7 +417,7 @@ function computeEdges(){
 
   // top-level ports
   for(const p of (model.ports||[])){
-    addNet('eport', p.name, { node: "port::"+p.name, pin: p.name, label: p.name, role: p.direction==='in' ? 'driver':'sink' });
+    addNet('eport', p.name, { node: "port::"+p.name, pin: p.name, label: p.name, role: p.dir==='in' ? 'driver':'sink' });
   }
 
   // instances
@@ -619,7 +619,7 @@ function render(){
   const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   g.setAttribute('transform', `translate(${view.x},${view.y}) scale(${view.k})`);
   svg.appendChild(g);
-
+  PIN_REGISTRY.length = 0;
   // helpers
   function attachPinHandlers(pinG){
     pinG.addEventListener('mousedown', (ev)=>{
@@ -676,8 +676,8 @@ function render(){
   // Port nodes
   for(const p of (model.ports||[])){
     const id = "port::"+p.name;
-    const pos = model.ui.nodes[id] || {x: p.direction==='in' ? 60 : 900, y: 80};
-    const n = {id, kind:p.direction==='in'?'entity_in':'entity_out', x:pos.x, y:pos.y, w:150, h:36, label:`${p.name} (${p.direction})`, inputs:[], outputs:[]};
+    const pos = model.ui.nodes[id] || {x: p.dir==='in' ? 60 : 900, y: 80};
+    const n = {id, kind:p.dir==='in'?'entity_in':'entity_out', x:pos.x, y:pos.y, w:150, h:36, label:`${p.name} (${p.dir})`, inputs:[], outputs:[]};
     nodes.push(n);
     ensurePinAnch(n);
   }
@@ -870,12 +870,12 @@ function render(){
     });
     window.addEventListener('mouseup', ()=>{ dragging=false; });
 
-    // Node highlight
-    grp.addEventListener('click', (ev)=>{
-      ev.stopPropagation();
-      clearSelection();
-      highlightNode(n.id);
-    });
+
+
+
+
+
+
 
     groupNodes.appendChild(grp);
   }
@@ -897,11 +897,11 @@ function render(){
     groups.forEach((list, key)=>{
       const e = list[0];
       edgesToDraw.push({
-        sNode:e.sNode, tNode:e.tNode,
-        sPin:e.sPin, tPin:e.tPin,
+        sNode: e.sNode, tNode: e.tNode,
+        sPin: e.sPin,  tPin: e.tPin,
         label: `${e.base} [${list.length}]`,
-        meta: list.map(x=>x.label).join(', '),
-        groupedIds: list // keep for tooltips/highlight semantics
+        meta: list.map(x => x.label).join(', '),
+        groupedIds: list              // keep originals for deletion/highlight
       });
     });
   }else{
@@ -953,6 +953,13 @@ function render(){
       path.setAttribute('marker-end', 'url(#arrow)');
       path.setAttribute('data-edge','1');
       path.dataset.sNode = E.sNode; path.dataset.tNode = E.tNode;
+      // store underlying edges so Delete can remove port_map entries
+      path.__edges = E.groupedIds.map(x => ({
+        base: x.base || E.label,
+        label: x.label,
+        sNode: x.sNode, sPin: x.sPin,
+        tNode: x.tNode, tPin: x.tPin
+      }));
       // tooltip
       path.addEventListener('mousemove', ev=>{
         const body = busesGrouped
@@ -964,6 +971,7 @@ function render(){
       path.addEventListener('click', ev=>{
         ev.stopPropagation();
         clearSelection();
+        selectedEdges.add(path)
         path.classList.add('hi-edge');
         // highlight endpoints
         const sGrp = svg.querySelector(`[data-node="${E.sNode}"]`);
@@ -1004,7 +1012,7 @@ function render(){
       ev.stopPropagation();
       clearSelection();
       const id = grp.getAttribute('data-node');
-      grp.classList.add('hi-node');
+      grp.classList.add('hi-node'); selectedNodes.add(id);
       // connected edges
       const conn = [...svg.querySelectorAll('path[data-edge]')].filter(p => p.dataset.sNode===id || p.dataset.tNode===id);
       conn.forEach(p=>p.classList.add('hi-edge'));
